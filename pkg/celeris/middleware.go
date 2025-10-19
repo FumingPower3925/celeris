@@ -372,7 +372,7 @@ func CompressWithConfig(config CompressConfig) Middleware {
 				}
 				_ = writer.Close()
 				encoding = "gzip"
-		}
+			}
 
 			// Only use compressed version if it's actually smaller
 			if compressed.Len() < len(body) && compressed.Len() > 0 {

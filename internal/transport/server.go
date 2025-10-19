@@ -963,7 +963,7 @@ func (c *Connection) WriteResponse(streamID uint32, status int, headers [][2]str
 	}
 	// Wake the event loop to ensure kernel send
 	_ = c.conn.Wake(nil)
-	
+
 	return nil
 }
 
@@ -1091,10 +1091,7 @@ func (c *Connection) SendGoAway(lastStreamID uint32, code http2.ErrCode, debug [
 	// Force immediate sending
 	_ = c.writer.Flush()
 	_ = c.conn.Wake(nil)
-	
 
-
-	
 	c.logger.Printf("Sent GOAWAY frame: code=%v, lastStream=%d", code, lastStreamID)
 
 	// Close the connection for connection-level errors after flushing GOAWAY
@@ -1124,9 +1121,10 @@ func (c *Connection) WriteRSTStreamPriority(streamID uint32, code http2.ErrCode)
 		return err
 	}
 	_ = c.conn.Wake(nil)
-	
+
 	return nil
 }
+
 // CloseConn closes the underlying TCP connection immediately to ensure peers observe error frames before teardown.
 func (c *Connection) CloseConn() error {
 	return c.conn.Close()
@@ -1136,8 +1134,6 @@ func (c *Connection) CloseConn() error {
 func (c *Connection) MarkStreamClosed(streamID uint32) {
 	c.closedStreams.Store(streamID, true)
 }
-
-
 
 // IsStreamClosed checks if a stream was closed/reset
 func (c *Connection) IsStreamClosed(streamID uint32) bool {
