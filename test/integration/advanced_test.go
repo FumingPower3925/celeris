@@ -28,7 +28,7 @@ func TestCustomHeaders(t *testing.T) {
 		server.ListenAndServe(router)
 	}()
 
-	time.Sleep(500 * time.Millisecond)
+	time.Sleep(100 * time.Millisecond)
 	defer server.Stop(context.Background())
 
 	client := createHTTP2Client()
@@ -69,7 +69,7 @@ func TestStatusCodes(t *testing.T) {
 		server.ListenAndServe(router)
 	}()
 
-	time.Sleep(500 * time.Millisecond)
+	time.Sleep(100 * time.Millisecond)
 	defer server.Stop(context.Background())
 
 	client := createHTTP2Client()
@@ -109,7 +109,7 @@ func TestLargePayload(t *testing.T) {
 		server.ListenAndServe(router)
 	}()
 
-	time.Sleep(500 * time.Millisecond)
+	time.Sleep(100 * time.Millisecond)
 	defer server.Stop(context.Background())
 
 	client := createHTTP2Client()
@@ -147,7 +147,7 @@ func TestNestedGroups(t *testing.T) {
 		server.ListenAndServe(router)
 	}()
 
-	time.Sleep(500 * time.Millisecond)
+	time.Sleep(100 * time.Millisecond)
 	defer server.Stop(context.Background())
 
 	client := createHTTP2Client()
@@ -179,7 +179,7 @@ func TestGracefulShutdown(t *testing.T) {
 		server.ListenAndServe(router)
 	}()
 
-	time.Sleep(500 * time.Millisecond)
+	time.Sleep(100 * time.Millisecond)
 
 	client := createHTTP2Client()
 

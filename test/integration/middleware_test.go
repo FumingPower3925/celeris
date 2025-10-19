@@ -38,7 +38,7 @@ func TestMiddlewareExecution(t *testing.T) {
 		server.ListenAndServe(router)
 	}()
 
-	time.Sleep(500 * time.Millisecond)
+	time.Sleep(100 * time.Millisecond)
 	defer server.Stop(context.Background())
 
 	client := createHTTP2Client()
@@ -76,7 +76,7 @@ func TestLoggerMiddleware(t *testing.T) {
 		server.ListenAndServe(router)
 	}()
 
-	time.Sleep(500 * time.Millisecond)
+	time.Sleep(100 * time.Millisecond)
 	defer server.Stop(context.Background())
 
 	client := createHTTP2Client()
@@ -108,7 +108,7 @@ func TestRecoveryMiddleware(t *testing.T) {
 		server.ListenAndServe(router)
 	}()
 
-	time.Sleep(500 * time.Millisecond)
+	time.Sleep(100 * time.Millisecond)
 	defer server.Stop(context.Background())
 
 	client := createHTTP2Client()

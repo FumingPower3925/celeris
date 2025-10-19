@@ -32,7 +32,7 @@ func TestBasicRequest(t *testing.T) {
 		server.ListenAndServe(router)
 	}()
 
-	time.Sleep(500 * time.Millisecond)
+	time.Sleep(100 * time.Millisecond)
 	defer server.Stop(context.Background())
 
 	client := createHTTP2Client()
@@ -67,7 +67,7 @@ func TestRouteParameters(t *testing.T) {
 		server.ListenAndServe(router)
 	}()
 
-	time.Sleep(500 * time.Millisecond)
+	time.Sleep(100 * time.Millisecond)
 	defer server.Stop(context.Background())
 
 	client := createHTTP2Client()
@@ -97,7 +97,7 @@ func TestNotFound(t *testing.T) {
 		server.ListenAndServe(router)
 	}()
 
-	time.Sleep(500 * time.Millisecond)
+	time.Sleep(100 * time.Millisecond)
 	defer server.Stop(context.Background())
 
 	client := createHTTP2Client()
@@ -130,6 +130,8 @@ func createHTTP2Client() *http.Client {
 			DialTLS: func(network, addr string, cfg *tls.Config) (net.Conn, error) {
 				return net.Dial(network, addr)
 			},
+			// Disable automatic compression so we can test our middleware
+			DisableCompression: true,
 		},
 		Timeout: 5 * time.Second,
 	}

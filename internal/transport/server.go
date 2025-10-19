@@ -111,7 +111,7 @@ func (s *Server) Stop(ctx context.Context) error {
 	})
 
 	// Give a very brief moment for streams to finish, then force close connections
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(50 * time.Millisecond)
 
 	s.connections.Range(func(key, _ interface{}) bool {
 		if gnetConn, ok := key.(gnet.Conn); ok {
@@ -122,7 +122,7 @@ func (s *Server) Stop(ctx context.Context) error {
 	})
 
 	// Wait briefly for OnClose to be called and connections to be removed
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(50 * time.Millisecond)
 
 	// Stop the gnet engine to prevent new connections
 	// Use background context since the original may have expired
