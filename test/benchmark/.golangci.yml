@@ -1,0 +1,24 @@
+version: 2
+
+run:
+  timeout: 5m
+
+linters:
+  enable:
+    - govet
+    - revive
+    - staticcheck
+    - unused
+  disable:
+    - errcheck   # Error handling adds overhead in benchmarks
+    - gosec      # Weak random and missing timeouts acceptable in benchmarks
+    - noctx      # Context not needed in benchmark tight loops
+    - dupl       # Code duplication acceptable in separate benchmark functions
+
+linters-settings:
+  revive:
+    enable-all-rules: false
+    rules:
+      - name: unused-parameter
+        severity: warning
+

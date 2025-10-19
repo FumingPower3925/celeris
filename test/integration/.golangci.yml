@@ -1,0 +1,15 @@
+version: 2
+
+run:
+  timeout: 5m
+
+linters:
+  enable:
+    - govet
+    - staticcheck
+    - unused
+  disable:
+    - errcheck   # Error handling in defers acceptable in integration tests
+    - bodyclose  # Body closing via defer acceptable in integration tests
+    - gosec      # Security checks not critical for integration tests
+

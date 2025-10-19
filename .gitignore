@@ -1,0 +1,75 @@
+# Binaries
+bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool
+*.out
+coverage.out
+coverage.html
+
+# Go workspace file
+go.work
+
+# Dependency directories
+vendor/
+
+# IDE specific files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Build artifacts
+dist/
+build/
+
+# Logs
+*.log
+
+# Environment files
+.env
+.env.local
+
+# Temporary files
+tmp/
+temp/
+.tmp/
+
+# golangci-lint
+golangci-lint-report.xml
+
+# SonarQube
+.sonar/
+.scannerwork/
+
+# Hugo
+docs/public/
+docs/resources/
+docs/.hugo_build.lock
+
+# Testing
+*.pid
+.server.pid
+
+# Profiling
+*.prof
+*.pprof
+
+# OS specific
+Thumbs.db
+.Spotlight-V100
+.Trashes
+
+# Project specific
+baseline.json
+
+results.*

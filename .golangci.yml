@@ -1,0 +1,94 @@
+version: 2
+
+run:
+  timeout: 5m
+  tests: true
+  modules-download-mode: readonly
+
+output:
+  format: colored-line-number
+  print-issued-lines: true
+  print-linter-name: true
+
+linters:
+  enable:
+    - errcheck        # Check for unchecked errors
+    - govet           # Vet examines Go source code
+    - ineffassign     # Detect ineffectual assignments
+    - staticcheck     # Static analysis checks (includes gosimple)
+    - unused          # Check for unused code
+    - misspell        # Check for commonly misspelled words
+    - gocritic        # Opinionated Go linter
+    - revive          # Fast, configurable linter
+    - gocyclo         # Cyclomatic complexity
+    - dupl            # Code clone detection
+    - prealloc        # Find slice declarations that could be preallocated
+    - unconvert       # Remove unnecessary type conversions
+    - unparam         # Find unused function parameters
+    - gosec           # Security checks
+    - bodyclose       # Check if HTTP response bodies are closed
+    - noctx           # Find HTTP requests without context
+    - rowserrcheck    # Check if sql.Rows.Err is checked
+    - sqlclosecheck   # Check if sql.DB is closed
+    - wastedassign    # Find wasted assignment statements
+    - whitespace      # Check for unnecessary whitespace
+
+linters-settings:
+  errcheck:
+    check-type-assertions: true
+    check-blank: true
+
+  govet:
+    check-shadowing: true
+    enable-all: true
+
+  gocyclo:
+    min-complexity: 15
+
+  dupl:
+    threshold: 100
+
+  gocritic:
+    enabled-tags:
+      - diagnostic
+      - experimental
+      - opinionated
+      - performance
+      - style
+
+  revive:
+    rules:
+      - name: exported
+        severity: warning
+        disabled: false
+      - name: var-naming
+        severity: warning
+        disabled: false
+      - name: package-comments
+        severity: warning
+        disabled: false
+
+issues:
+  exclude-use-default: false
+  max-issues-per-linter: 0
+  max-same-issues: 0
+  
+  exclude-rules:
+    # Exclude some linters from running on tests files
+    - path: _test\.go
+      linters:
+        - gocyclo
+        - errcheck
+        - dupl
+        - gosec
+    
+    # Exclude known issues
+    - linters:
+        - staticcheck
+      text: "SA9003:"
+    
+    # Exclude shadow checking on variable named err
+    - linters:
+        - govet
+      text: 'shadow: declaration of "err"'
+

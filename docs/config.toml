@@ -1,0 +1,32 @@
+baseURL = 'https://celeris-docs.pages.dev/'
+languageCode = 'en-us'
+title = 'Celeris Documentation'
+theme = 'hugo-book'
+
+# Book configuration
+enableGitInfo = true
+
+[params]
+  # Book theme parameters
+  BookRepo = 'https://github.com/FumingPower3925/celeris'
+  BookEditPath = 'edit/main/docs'
+  BookSection = 'content'
+  BookMenuBundle = '/menu'
+  BookToC = true
+  BookComments = false
+  BookSearch = true
+  BookPortableLinks = true
+  
+[markup]
+  [markup.goldmark.renderer]
+    unsafe = true
+  [markup.tableOfContents]
+    startLevel = 1
+    endLevel = 3
+
+[menu]
+  [[menu.before]]
+    name = "GitHub"
+    url = "https://github.com/FumingPower3925/celeris"
+    weight = 10
+

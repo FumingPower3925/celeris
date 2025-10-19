@@ -1,0 +1,139 @@
+name: Load Test
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  load-test:
+    name: Load Testing
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.22'
+        cache: true
+        
+    - name: Build server
+      run: go build -o bin/example ./cmd/example
+      
+    - name: Install nghttp2 (h2load)
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y nghttp2-client
+        
+    - name: Start server
+      run: |
+        ./bin/example &
+        echo $! > server.pid
+        sleep 3
+        
+    - name: Run h2load
+      id: h2load
+      run: |
+        h2load -n 10000 -c 100 -m 10 http://localhost:8080/ | tee h2load-results.txt
+        
+    - name: Stop server
+      if: always()
+      run: |
+        if [ -f server.pid ]; then
+          kill $(cat server.pid) || true
+        fi
+        
+    - name: Parse results
+      run: |
+        echo "## Load Test Results" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo '```' >> $GITHUB_STEP_SUMMARY
+        cat h2load-results.txt >> $GITHUB_STEP_SUMMARY
+        echo '```' >> $GITHUB_STEP_SUMMARY
+        
+    - name: Upload results
+      uses: actions/upload-artifact@v4
+      with:
+        name: load-test-results
+        path: h2load-results.txt
+        
+    - name: Check performance regression
+      run: |
+        # Extract requests per second
+        RPS=$(grep "requests/s" h2load-results.txt | awk '{print $1}')
+        echo "Current RPS: $RPS"
+        
+        # Baseline: 50,000 RPS minimum
+        BASELINE=50000
+        
+        if (( $(echo "$RPS < $BASELINE" | bc -l) )); then
+          echo "❌ Performance regression detected! RPS: $RPS < $BASELINE"
+          exit 1
+        else
+          echo "✅ Performance check passed! RPS: $RPS >= $BASELINE"
+        fi
+
+  h2spec-test:
+    name: HTTP/2 Compliance Test
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.22'
+        cache: true
+        
+    - name: Build server
+      run: go build -o bin/example ./cmd/example
+      
+    - name: Install h2spec
+      run: |
+        wget https://github.com/summerwind/h2spec/releases/latest/download/h2spec_linux_amd64.tar.gz
+        tar -xzf h2spec_linux_amd64.tar.gz
+        chmod +x h2spec
+        sudo mv h2spec /usr/local/bin/
+        
+    - name: Start server
+      run: |
+        ./bin/example &
+        echo $! > server.pid
+        sleep 3
+        
+    - name: Run h2spec
+      id: h2spec
+      continue-on-error: true
+      run: |
+        h2spec -p 8080 -t -k -S | tee h2spec-results.txt
+        
+    - name: Stop server
+      if: always()
+      run: |
+        if [ -f server.pid ]; then
+          kill $(cat server.pid) || true
+        fi
+        
+    - name: Parse h2spec results
+      run: |
+        echo "## HTTP/2 Compliance Test Results" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo '```' >> $GITHUB_STEP_SUMMARY
+        cat h2spec-results.txt >> $GITHUB_STEP_SUMMARY
+        echo '```' >> $GITHUB_STEP_SUMMARY
+        
+    - name: Upload h2spec results
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: h2spec-results
+        path: h2spec-results.txt
+
