@@ -1192,14 +1192,18 @@ func (w *connWriter) filterFrames(part []byte) []byte {
 		if length < 0 || off+9+length > len(part) {
 			break
 		}
+		ftype := http2.FrameType(part[off+3])
 		sid := binary.BigEndian.Uint32(part[off+5:off+9]) & 0x7fffffff
 		keep := true
 		if sid != 0 && w.parent != nil {
-			if s, ok := w.parent.processor.GetManager().GetStream(sid); ok && s.ClosedByReset {
-				keep = false
-			}
-			if keep && w.parent.IsStreamClosed(sid) {
-				keep = false
+			// Never drop RST_STREAM frames; peers must observe them even for closed streams
+			if ftype != http2.FrameRSTStream {
+				if s, ok := w.parent.processor.GetManager().GetStream(sid); ok && s.ClosedByReset {
+					keep = false
+				}
+				if keep && w.parent.IsStreamClosed(sid) {
+					keep = false
+				}
 			}
 		}
 		if keep {
@@ -1256,13 +1260,16 @@ func (w *connWriter) Write(p []byte) (n int, err error) {
 		// Decide whether to keep this frame
 		keep := true
 		if sid != 0 && w.parent != nil {
-			// Drop frames for streams reset/closed by peer
-			if s, ok := w.parent.processor.GetManager().GetStream(sid); ok && s.ClosedByReset {
-				keep = false
-			}
-			// Also drop if connection marked stream closed explicitly
-			if keep && w.parent.IsStreamClosed(sid) {
-				keep = false
+			// Never drop RST_STREAM frames; peers must observe them even for closed streams
+			if ftype != http2.FrameRSTStream {
+				// Drop frames for streams reset/closed by peer
+				if s, ok := w.parent.processor.GetManager().GetStream(sid); ok && s.ClosedByReset {
+					keep = false
+				}
+				// Also drop if connection marked stream closed explicitly
+				if keep && w.parent.IsStreamClosed(sid) {
+					keep = false
+				}
 			}
 		}
 
@@ -1399,7 +1406,7 @@ func (c *Connection) SendGoAway(lastStreamID uint32, code http2.ErrCode, debug [
 		c.logger.Printf("Closing connection after GOAWAY with code=%v", code)
 		// Set a flag that HandleData can check to return error
 		c.sentGoAway.Store(true)
-		_ = c.conn.Close()  // Also call Close() directly
+		_ = c.conn.Close() // Also call Close() directly
 	}
 	return nil
 }
