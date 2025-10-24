@@ -6,7 +6,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/albertbausili/celeris/internal/stream"
+	"github.com/albertbausili/celeris/internal/h2/stream"
 )
 
 func TestRouter_AddRoute(t *testing.T) {

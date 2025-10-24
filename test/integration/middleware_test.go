@@ -16,7 +16,7 @@ func TestMiddlewareExecution(t *testing.T) {
 	var mu sync.Mutex
 
 	router := celeris.NewRouter()
-	
+
 	router.Use(func(next celeris.Handler) celeris.Handler {
 		return celeris.HandlerFunc(func(ctx *celeris.Context) error {
 			mu.Lock()
@@ -34,11 +34,10 @@ func TestMiddlewareExecution(t *testing.T) {
 	config.Addr = getTestPort()
 	server := celeris.New(config)
 
-	go func() {
-		server.ListenAndServe(router)
-	}()
-
-	time.Sleep(100 * time.Millisecond)
+	go func() { _ = server.ListenAndServe(router) }()
+	if err := waitForServer(config.Addr, 2*time.Second); err != nil {
+		t.Fatalf("Server error: %v", err)
+	}
 	defer server.Stop(context.Background())
 
 	client := createHTTP2Client()
@@ -72,11 +71,10 @@ func TestLoggerMiddleware(t *testing.T) {
 	config.Addr = getTestPort()
 	server := celeris.New(config)
 
-	go func() {
-		server.ListenAndServe(router)
-	}()
-
-	time.Sleep(100 * time.Millisecond)
+	go func() { _ = server.ListenAndServe(router) }()
+	if err := waitForServer(config.Addr, 2*time.Second); err != nil {
+		t.Fatalf("Server error: %v", err)
+	}
 	defer server.Stop(context.Background())
 
 	client := createHTTP2Client()
@@ -104,11 +102,10 @@ func TestRecoveryMiddleware(t *testing.T) {
 	config.Addr = getTestPort()
 	server := celeris.New(config)
 
-	go func() {
-		server.ListenAndServe(router)
-	}()
-
-	time.Sleep(100 * time.Millisecond)
+	go func() { _ = server.ListenAndServe(router) }()
+	if err := waitForServer(config.Addr, 2*time.Second); err != nil {
+		t.Fatalf("Server error: %v", err)
+	}
 	defer server.Stop(context.Background())
 
 	client := createHTTP2Client()

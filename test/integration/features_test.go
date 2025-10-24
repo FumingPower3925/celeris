@@ -41,17 +41,14 @@ func TestQueryParameters(t *testing.T) {
 	config.Addr = getTestPort()
 	server := celeris.New(config)
 
-	go func() {
-		if err := server.ListenAndServe(router); err != nil {
-			t.Logf("Server error: %v", err)
-		}
-	}()
+	go func() { _ = server.ListenAndServe(router) }()
 	defer server.Stop(context.Background())
-
-	time.Sleep(100 * time.Millisecond)
+	if err := waitForServer(config.Addr, 3*time.Second); err != nil {
+		t.Fatalf("Server error: %v", err)
+	}
 
 	client := createHTTP2Client()
-	resp, err := client.Get("http://" + config.Addr + "/search?q=golang&page=2&enabled=true")
+	resp, err := client.Get("http://localhost" + config.Addr + "/search?q=golang&page=2&enabled=true")
 	if err != nil {
 		t.Fatalf("Request failed: %v", err)
 	}
@@ -94,19 +91,16 @@ func TestCookies(t *testing.T) {
 	config.Addr = getTestPort()
 	server := celeris.New(config)
 
-	go func() {
-		if err := server.ListenAndServe(router); err != nil {
-			t.Logf("Server error: %v", err)
-		}
-	}()
+	go func() { _ = server.ListenAndServe(router) }()
 	defer server.Stop(context.Background())
-
-	time.Sleep(100 * time.Millisecond)
+	if err := waitForServer(config.Addr, 2*time.Second); err != nil {
+		t.Fatalf("Server error: %v", err)
+	}
 
 	client := createHTTP2Client()
 
 	// Set cookie
-	resp, err := client.Get("http://" + config.Addr + "/set-cookie")
+	resp, err := client.Get("http://localhost" + config.Addr + "/set-cookie")
 	if err != nil {
 		t.Fatalf("Request failed: %v", err)
 	}
@@ -136,17 +130,14 @@ func TestStaticFiles(t *testing.T) {
 	config.Addr = getTestPort()
 	server := celeris.New(config)
 
-	go func() {
-		if err := server.ListenAndServe(router); err != nil {
-			t.Logf("Server error: %v", err)
-		}
-	}()
+	go func() { _ = server.ListenAndServe(router) }()
 	defer server.Stop(context.Background())
-
-	time.Sleep(100 * time.Millisecond)
+	if err := waitForServer(config.Addr, 2*time.Second); err != nil {
+		t.Fatalf("Server error: %v", err)
+	}
 
 	client := createHTTP2Client()
-	resp, err := client.Get("http://" + config.Addr + "/static/test.txt")
+	resp, err := client.Get("http://localhost" + config.Addr + "/static/test.txt")
 	if err != nil {
 		t.Fatalf("Request failed: %v", err)
 	}
@@ -168,7 +159,7 @@ func TestStaticFiles(t *testing.T) {
 
 	// Test 304 Not Modified
 	etag := resp.Header.Get("Etag")
-	req, _ := http.NewRequest("GET", "http://"+config.Addr+"/static/test.txt", nil)
+	req, _ := http.NewRequest("GET", "http://localhost"+config.Addr+"/static/test.txt", nil)
 	req.Header.Set("If-None-Match", etag)
 
 	resp2, err := client.Do(req)
@@ -197,17 +188,14 @@ func TestErrorHandling(t *testing.T) {
 	config.Addr = getTestPort()
 	server := celeris.New(config)
 
-	go func() {
-		if err := server.ListenAndServe(router); err != nil {
-			t.Logf("Server error: %v", err)
-		}
-	}()
+	go func() { _ = server.ListenAndServe(router) }()
 	defer server.Stop(context.Background())
-
-	time.Sleep(100 * time.Millisecond)
+	if err := waitForServer(config.Addr, 2*time.Second); err != nil {
+		t.Fatalf("Server error: %v", err)
+	}
 
 	client := createHTTP2Client()
-	req, _ := http.NewRequest("GET", "http://"+config.Addr+"/error", nil)
+	req, _ := http.NewRequest("GET", "http://localhost"+config.Addr+"/error", nil)
 	req.Header.Set("Accept", "application/json")
 
 	resp, err := client.Do(req)
@@ -252,17 +240,14 @@ func TestStreaming(t *testing.T) {
 	config.Addr = getTestPort()
 	server := celeris.New(config)
 
-	go func() {
-		if err := server.ListenAndServe(router); err != nil {
-			t.Logf("Server error: %v", err)
-		}
-	}()
+	go func() { _ = server.ListenAndServe(router) }()
 	defer server.Stop(context.Background())
-
-	time.Sleep(100 * time.Millisecond)
+	if err := waitForServer(config.Addr, 2*time.Second); err != nil {
+		t.Fatalf("Server error: %v", err)
+	}
 
 	client := createHTTP2Client()
-	resp, err := client.Get("http://" + config.Addr + "/stream")
+	resp, err := client.Get("http://localhost" + config.Addr + "/stream")
 	if err != nil {
 		t.Fatalf("Request failed: %v", err)
 	}
@@ -310,17 +295,14 @@ func TestSSE(t *testing.T) {
 	config.Addr = getTestPort()
 	server := celeris.New(config)
 
-	go func() {
-		if err := server.ListenAndServe(router); err != nil {
-			t.Logf("Server error: %v", err)
-		}
-	}()
+	go func() { _ = server.ListenAndServe(router) }()
 	defer server.Stop(context.Background())
-
-	time.Sleep(100 * time.Millisecond)
+	if err := waitForServer(config.Addr, 3*time.Second); err != nil {
+		t.Fatalf("Server error: %v", err)
+	}
 
 	client := createHTTP2Client()
-	resp, err := client.Get("http://" + config.Addr + "/events")
+	resp, err := client.Get("http://localhost" + config.Addr + "/events")
 	if err != nil {
 		t.Fatalf("Request failed: %v", err)
 	}

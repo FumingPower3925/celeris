@@ -24,11 +24,10 @@ func TestCustomHeaders(t *testing.T) {
 	config.Addr = getTestPort()
 	server := celeris.New(config)
 
-	go func() {
-		server.ListenAndServe(router)
-	}()
-
-	time.Sleep(100 * time.Millisecond)
+	go func() { _ = server.ListenAndServe(router) }()
+	if err := waitForServer(config.Addr, 2*time.Second); err != nil {
+		t.Fatalf("Server error: %v", err)
+	}
 	defer server.Stop(context.Background())
 
 	client := createHTTP2Client()
@@ -65,11 +64,10 @@ func TestStatusCodes(t *testing.T) {
 	config.Addr = getTestPort()
 	server := celeris.New(config)
 
-	go func() {
-		server.ListenAndServe(router)
-	}()
-
-	time.Sleep(100 * time.Millisecond)
+	go func() { _ = server.ListenAndServe(router) }()
+	if err := waitForServer(config.Addr, 2*time.Second); err != nil {
+		t.Fatalf("Server error: %v", err)
+	}
 	defer server.Stop(context.Background())
 
 	client := createHTTP2Client()
@@ -105,11 +103,10 @@ func TestLargePayload(t *testing.T) {
 	config.Addr = getTestPort()
 	server := celeris.New(config)
 
-	go func() {
-		server.ListenAndServe(router)
-	}()
-
-	time.Sleep(100 * time.Millisecond)
+	go func() { _ = server.ListenAndServe(router) }()
+	if err := waitForServer(config.Addr, 2*time.Second); err != nil {
+		t.Fatalf("Server error: %v", err)
+	}
 	defer server.Stop(context.Background())
 
 	client := createHTTP2Client()

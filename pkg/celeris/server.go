@@ -4,15 +4,15 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/albertbausili/celeris/internal/stream"
-	"github.com/albertbausili/celeris/internal/transport"
+	"github.com/albertbausili/celeris/internal/h2/stream"
+	"github.com/albertbausili/celeris/internal/mux"
 )
 
-// Server represents an HTTP/2 server instance.
+// Server represents a server instance supporting HTTP/1.1 and/or HTTP/2.
 type Server struct {
 	config    Config
 	handler   Handler
-	transport *transport.Server
+	transport *mux.Server
 }
 
 // New creates a new Server with the provided configuration.
@@ -43,7 +43,7 @@ func (s *Server) ListenAndServe(handler Handler) error {
 	return s.Start()
 }
 
-// Start begins accepting HTTP/2 connections.
+// Start begins accepting HTTP/1.1 and/or HTTP/2 connections.
 func (s *Server) Start() error {
 	if s.handler == nil {
 		return fmt.Errorf("handler not set")
@@ -53,13 +53,15 @@ func (s *Server) Start() error {
 		handler: s.handler,
 	}
 
-	s.transport = transport.NewServer(streamHandler, transport.Config{
+	s.transport = mux.NewServer(streamHandler, mux.Config{
 		Addr:                 s.config.Addr,
 		Multicore:            s.config.Multicore,
 		NumEventLoop:         s.config.NumEventLoop,
 		ReusePort:            s.config.ReusePort,
 		Logger:               s.config.Logger,
 		MaxConcurrentStreams: s.config.MaxConcurrentStreams,
+		EnableH1:             s.config.EnableH1,
+		EnableH2:             s.config.EnableH2,
 	})
 
 	return s.transport.Start()

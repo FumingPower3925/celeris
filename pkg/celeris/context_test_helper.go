@@ -3,7 +3,7 @@ package celeris
 import (
 	"context"
 
-	"github.com/albertbausili/celeris/internal/stream"
+	"github.com/albertbausili/celeris/internal/h2/stream"
 )
 
 // NewTestContext creates a properly initialized Context for testing purposes.

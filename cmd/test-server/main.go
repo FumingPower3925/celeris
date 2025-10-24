@@ -13,7 +13,7 @@ func main() {
 
 	// Basic routes for testing
 	router.GET("/", func(ctx *celeris.Context) error {
-		return ctx.String(200, "Hello, World!")
+		return ctx.String(200, "hello")
 	})
 
 	router.GET("/ping", func(ctx *celeris.Context) error {
@@ -29,11 +29,14 @@ func main() {
 	})
 
 	config := celeris.DefaultConfig()
-	config.Addr = ":8080"
+	config.Addr = ":18080"
+	// Set concurrency limit for h2spec testing
+	// Note: h2spec concurrency test will exceed this to verify refusal
+	config.MaxConcurrentStreams = 100
 
 	server := celeris.New(config)
 
-	fmt.Println("Test server running on :8080")
+	fmt.Println("Test server running on :18080")
 	if err := server.ListenAndServe(router); err != nil {
 		log.Fatal(err)
 	}

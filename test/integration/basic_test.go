@@ -28,11 +28,10 @@ func TestBasicRequest(t *testing.T) {
 	config.Addr = getTestPort()
 	server := celeris.New(config)
 
-	go func() {
-		server.ListenAndServe(router)
-	}()
-
-	time.Sleep(100 * time.Millisecond)
+	go func() { _ = server.ListenAndServe(router) }()
+	if err := waitForServer(config.Addr, 2*time.Second); err != nil {
+		t.Fatalf("Server error: %v", err)
+	}
 	defer server.Stop(context.Background())
 
 	client := createHTTP2Client()
@@ -63,11 +62,10 @@ func TestRouteParameters(t *testing.T) {
 	config.Addr = getTestPort()
 	server := celeris.New(config)
 
-	go func() {
-		server.ListenAndServe(router)
-	}()
-
-	time.Sleep(100 * time.Millisecond)
+	go func() { _ = server.ListenAndServe(router) }()
+	if err := waitForServer(config.Addr, 2*time.Second); err != nil {
+		t.Fatalf("Server error: %v", err)
+	}
 	defer server.Stop(context.Background())
 
 	client := createHTTP2Client()
@@ -93,11 +91,10 @@ func TestNotFound(t *testing.T) {
 	config.Addr = getTestPort()
 	server := celeris.New(config)
 
-	go func() {
-		server.ListenAndServe(router)
-	}()
-
-	time.Sleep(100 * time.Millisecond)
+	go func() { _ = server.ListenAndServe(router) }()
+	if err := waitForServer(config.Addr, 2*time.Second); err != nil {
+		t.Fatalf("Server error: %v", err)
+	}
 	defer server.Stop(context.Background())
 
 	client := createHTTP2Client()
@@ -121,6 +118,19 @@ func getTestPort() string {
 	// Use atomic counter to ensure unique ports across parallel tests
 	port := 20000 + atomic.AddUint32(&testPortCounter, 1)
 	return fmt.Sprintf(":%d", port)
+}
+
+func waitForServer(addr string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		conn, err := net.DialTimeout("tcp", "127.0.0.1"+addr, 50*time.Millisecond)
+		if err == nil {
+			_ = conn.Close()
+			return nil
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	return fmt.Errorf("server %s not ready", addr)
 }
 
 func createHTTP2Client() *http.Client {

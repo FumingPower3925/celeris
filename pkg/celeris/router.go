@@ -255,6 +255,11 @@ func (r *Router) FindRoute(method, path string) (Handler, map[string]string) {
 		return r.notFound, nil
 	}
 
+	// Strip query string if present
+	if q := strings.IndexByte(path, '?'); q >= 0 {
+		path = path[:q]
+	}
+
 	if path == "/" {
 		if root.handler != nil {
 			return root.handler, nil

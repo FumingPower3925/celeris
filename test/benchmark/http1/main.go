@@ -1,0 +1,526 @@
+// Package main provides HTTP/1.1 ramp-up benchmark across multiple frameworks.
+package main
+
+import (
+	"context"
+	"encoding/csv"
+	"encoding/json"
+	"fmt"
+	"io"
+	"log"
+	"math"
+	"net/http"
+	"os"
+	"sort"
+	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/albertbausili/celeris/pkg/celeris"
+	"github.com/gin-gonic/gin"
+	"github.com/go-chi/chi/v5"
+	"github.com/gofiber/fiber/v2"
+	"github.com/labstack/echo/v4"
+)
+
+type RampUpResult struct {
+	Framework     string  `json:"framework"`
+	Scenario      string  `json:"scenario"`
+	MaxClients    int     `json:"max_clients"`
+	MaxRPS        float64 `json:"max_rps"`
+	P95AtMax      float64 `json:"p95_at_max_ms"`
+	TimeToDegrade float64 `json:"time_to_degrade_s"`
+}
+
+// ServerHandle represents a running server and how to stop it.
+type ServerHandle struct {
+	Addr string
+	Stop func(context.Context) error
+}
+
+const (
+	rampUpInterval    = 25 * time.Millisecond // Add 1 client every 25ms (40 clients/second!)
+	measureWindow     = 1 * time.Second       // Measure p95 over 1s windows
+	degradationThresh = 100.0                 // p95 > 100ms = degraded
+	timeoutThresh     = 3 * time.Second       // Request timeout
+	maxTestDuration   = 30 * time.Second      // Max test duration
+	requestDelay      = 2 * time.Millisecond  // Minimal delay between requests per client
+)
+
+func main() {
+	scenarios := []string{"simple", "json", "params"}
+	frameworks := []string{"celeris", "nethttp", "gin", "echo", "chi", "fiber"}
+
+	var results []RampUpResult
+	for _, fw := range frameworks {
+		for _, sc := range scenarios {
+			srv, client := startServerHTTP1(fw, sc)
+			if srv == nil {
+				continue
+			}
+			url := "http://" + srv.Addr + scenarioPathStr(sc)
+
+			// Warm up server and ensure 200 OK is reachable
+			_ = warmup(client, url)
+
+			r := rampUpTest(client, url, fw, sc)
+
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			_ = srv.Stop(ctx)
+			cancel()
+			results = append(results, r)
+			time.Sleep(1 * time.Second) // Cool down between tests
+		}
+	}
+
+	printRampUpResults(results)
+	saveRampUpResults(results)
+}
+
+func scenarioPathStr(sc string) string {
+	switch sc {
+	case "simple":
+		return "/"
+	case "json":
+		return "/json"
+	case "params":
+		return "/user/123/post/456"
+	default:
+		return "/"
+	}
+}
+
+func startServerHTTP1(framework, scenario string) (*ServerHandle, *http.Client) {
+	port := ":8081"
+	addr := "127.0.0.1" + port
+
+	client := &http.Client{
+		Timeout: timeoutThresh,
+		Transport: &http.Transport{
+			MaxIdleConns:        1000,
+			MaxIdleConnsPerHost: 1000,
+			IdleConnTimeout:     90 * time.Second,
+		},
+	}
+
+	switch framework {
+	case "nethttp":
+		return startNetHTTP(addr, scenario), client
+	case "gin":
+		return startGin(addr, scenario), client
+	case "echo":
+		return startEcho(addr, scenario), client
+	case "chi":
+		return startChi(addr, scenario), client
+	case "fiber":
+		return startFiber(addr, scenario), client
+	case "celeris":
+		return startCelerisHTTP1(addr, scenario), client
+	default:
+		return nil, nil
+	}
+}
+
+func warmup(client *http.Client, url string) error {
+	for i := 0; i < 5; i++ {
+		resp, err := client.Get(url)
+		if err != nil {
+			time.Sleep(20 * time.Millisecond)
+			continue
+		}
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
+		if resp.StatusCode == 200 {
+			return nil
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	return nil
+}
+
+func startNetHTTP(addr, scenario string) *ServerHandle {
+	mux := http.NewServeMux()
+	switch scenario {
+	case "simple":
+		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(200)
+			_, _ = w.Write([]byte("Hello, World!"))
+		})
+	case "json":
+		mux.HandleFunc("/json", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(200)
+			_, _ = w.Write([]byte(`{"message":"Hello, World!"}`))
+		})
+	case "params":
+		mux.HandleFunc("/user/", func(w http.ResponseWriter, r *http.Request) {
+			// very simple param extraction: /user/123/post/456
+			parts := strings.Split(r.URL.Path, "/")
+			if len(parts) >= 5 && parts[1] == "user" && parts[3] == "post" {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(200)
+				_, _ = w.Write([]byte(fmt.Sprintf(`{"userId":"%s","postId":"%s"}`, parts[2], parts[4])))
+				return
+			}
+			http.NotFound(w, r)
+		})
+	}
+	srv := &http.Server{Addr: addr, Handler: mux}
+	go func() { _ = srv.ListenAndServe() }()
+	time.Sleep(100 * time.Millisecond)
+	return &ServerHandle{Addr: addr, Stop: srv.Shutdown}
+}
+
+func startGin(addr, scenario string) *ServerHandle {
+	gin.SetMode(gin.ReleaseMode)
+	r := gin.New()
+	r.SetTrustedProxies(nil)
+	switch scenario {
+	case "simple":
+		r.GET("/", func(c *gin.Context) { c.String(200, "Hello, World!") })
+	case "json":
+		r.GET("/json", func(c *gin.Context) { c.JSON(200, gin.H{"message": "Hello, World!"}) })
+	case "params":
+		r.GET("/user/:userId/post/:postId", func(c *gin.Context) {
+			c.JSON(200, gin.H{"userId": c.Param("userId"), "postId": c.Param("postId")})
+		})
+	}
+	srv := &http.Server{Addr: addr, Handler: r}
+	go func() { _ = srv.ListenAndServe() }()
+	time.Sleep(100 * time.Millisecond)
+	return &ServerHandle{Addr: addr, Stop: srv.Shutdown}
+}
+
+func startEcho(addr, scenario string) *ServerHandle {
+	e := echo.New()
+	e.HideBanner = true
+	e.HidePort = true
+	switch scenario {
+	case "simple":
+		e.GET("/", func(c echo.Context) error { return c.String(200, "Hello, World!") })
+	case "json":
+		e.GET("/json", func(c echo.Context) error { return c.JSON(200, map[string]string{"message": "Hello, World!"}) })
+	case "params":
+		e.GET("/user/:userId/post/:postId", func(c echo.Context) error {
+			return c.JSON(200, map[string]string{"userId": c.Param("userId"), "postId": c.Param("postId")})
+		})
+	}
+	go func() { _ = e.Start(addr) }()
+	time.Sleep(100 * time.Millisecond)
+	return &ServerHandle{Addr: addr, Stop: func(ctx context.Context) error { return e.Shutdown(ctx) }}
+}
+
+func startChi(addr, scenario string) *ServerHandle {
+	r := chi.NewRouter()
+	switch scenario {
+	case "simple":
+		r.Get("/", func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(200)
+			_, _ = w.Write([]byte("Hello, World!"))
+		})
+	case "json":
+		r.Get("/json", func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(200)
+			_, _ = w.Write([]byte(`{"message":"Hello, World!"}`))
+		})
+	case "params":
+		r.Get("/user/{userId}/post/{postId}", func(w http.ResponseWriter, req *http.Request) {
+			userId := chi.URLParam(req, "userId")
+			postId := chi.URLParam(req, "postId")
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(200)
+			_, _ = w.Write([]byte(fmt.Sprintf(`{"userId":"%s","postId":"%s"}`, userId, postId)))
+		})
+	}
+	srv := &http.Server{Addr: addr, Handler: r}
+	go func() { _ = srv.ListenAndServe() }()
+	time.Sleep(100 * time.Millisecond)
+	return &ServerHandle{Addr: addr, Stop: srv.Shutdown}
+}
+
+func startFiber(addr, scenario string) *ServerHandle {
+	app := fiber.New(fiber.Config{
+		DisableStartupMessage: true,
+	})
+
+	switch scenario {
+	case "simple":
+		app.Get("/", func(c *fiber.Ctx) error {
+			return c.SendString("Hello, World!")
+		})
+	case "json":
+		app.Get("/json", func(c *fiber.Ctx) error {
+			return c.JSON(fiber.Map{"message": "Hello, World!"})
+		})
+	case "params":
+		app.Get("/user/:userId/post/:postId", func(c *fiber.Ctx) error {
+			return c.JSON(fiber.Map{
+				"userId": c.Params("userId"),
+				"postId": c.Params("postId"),
+			})
+		})
+	}
+
+	go func() {
+		_ = app.Listen(addr)
+	}()
+
+	time.Sleep(100 * time.Millisecond)
+
+	return &ServerHandle{
+		Addr: addr,
+		Stop: func(ctx context.Context) error {
+			return app.Shutdown()
+		},
+	}
+}
+
+func startCelerisHTTP1(addr, scenario string) *ServerHandle {
+	router := celeris.NewRouter()
+
+	switch scenario {
+	case "simple":
+		router.GET("/", func(ctx *celeris.Context) error {
+			return ctx.String(200, "Hello, World!")
+		})
+	case "json":
+		router.GET("/json", func(ctx *celeris.Context) error {
+			return ctx.JSON(200, map[string]string{"message": "Hello, World!"})
+		})
+	case "params":
+		router.GET("/user/:userId/post/:postId", func(ctx *celeris.Context) error {
+			return ctx.JSON(200, map[string]string{
+				"userId": ctx.Param("userId"),
+				"postId": ctx.Param("postId"),
+			})
+		})
+	}
+
+	config := celeris.DefaultConfig()
+	config.Addr = addr
+	config.EnableH2 = false // HTTP/1.1 only
+	// Silence server logs for clean benchmark output
+	config.Logger = log.New(io.Discard, "", 0)
+
+	server := celeris.New(config)
+
+	go func() {
+		_ = server.ListenAndServe(router)
+	}()
+
+	time.Sleep(100 * time.Millisecond)
+
+	return &ServerHandle{
+		Addr: addr,
+		Stop: func(ctx context.Context) error {
+			return server.Stop(ctx)
+		},
+	}
+}
+
+func rampUpTest(client *http.Client, url, framework, scenario string) RampUpResult {
+	var activeClients atomic.Int32
+	var totalRequests atomic.Int64
+	var recentLatencies sync.Map // map[int64][]float64 keyed by second
+
+	stopChan := make(chan struct{})
+	var wg sync.WaitGroup
+
+	// Worker function
+	workerFunc := func() {
+		defer wg.Done()
+		defer activeClients.Add(-1)
+
+		for {
+			select {
+			case <-stopChan:
+				return
+			default:
+			}
+
+			start := time.Now()
+			resp, err := client.Get(url)
+			latency := time.Since(start).Seconds() * 1000 // ms
+
+			if err == nil && resp.StatusCode == 200 {
+				_, _ = io.Copy(io.Discard, resp.Body)
+				resp.Body.Close()
+				totalRequests.Add(1)
+
+				// Record latency
+				second := time.Now().Unix()
+				latSlice, _ := recentLatencies.LoadOrStore(second, &sync.Mutex{})
+				mu := latSlice.(*sync.Mutex)
+				mu.Lock()
+				key := fmt.Sprintf("%d-data", second)
+				data, _ := recentLatencies.LoadOrStore(key, []float64{})
+				dataSlice := data.([]float64)
+				dataSlice = append(dataSlice, latency)
+				recentLatencies.Store(key, dataSlice)
+				mu.Unlock()
+			} else if framework == "celeris" && scenario == "json" && err == nil {
+				// Minimal debug: observe non-200 statuses for Celeris JSON (first few only)
+				// Avoiding heavy logs
+				_ = resp.Body.Close()
+			}
+
+			time.Sleep(requestDelay)
+		}
+	}
+
+	// Ramp up clients
+	ticker := time.NewTicker(rampUpInterval)
+	defer ticker.Stop()
+
+	startTime := time.Now()
+	maxClients := 0
+	maxRPS := 0.0
+	p95AtMax := 0.0
+	var timeToDegrade float64
+
+	measureTicker := time.NewTicker(measureWindow)
+	defer measureTicker.Stop()
+
+	lastCount := totalRequests.Load()
+	lastTime := time.Now()
+
+	go func() {
+		for range measureTicker.C {
+			currentCount := totalRequests.Load()
+			currentTime := time.Now()
+			elapsed := currentTime.Sub(lastTime).Seconds()
+			rps := float64(currentCount-lastCount) / elapsed
+
+			// Calculate p95 for current window
+			second := currentTime.Unix()
+			key := fmt.Sprintf("%d-data", second-1) // Previous second
+			if data, ok := recentLatencies.Load(key); ok {
+				latencies := data.([]float64)
+				if len(latencies) > 0 {
+					p95 := percentile(latencies, 0.95)
+
+					clients := int(activeClients.Load())
+					if rps > maxRPS {
+						maxRPS = rps
+						maxClients = clients
+						p95AtMax = p95
+					}
+
+					if p95 > degradationThresh {
+						timeToDegrade = time.Since(startTime).Seconds()
+						close(stopChan)
+						return
+					}
+				}
+			}
+
+			lastCount = currentCount
+			lastTime = currentTime
+		}
+	}()
+
+	// Ramp up loop
+	for {
+		select {
+		case <-ticker.C:
+			if time.Since(startTime) > maxTestDuration {
+				close(stopChan)
+				goto done
+			}
+			activeClients.Add(1)
+			wg.Add(1)
+			go workerFunc()
+		case <-stopChan:
+			goto done
+		}
+	}
+
+done:
+	wg.Wait()
+
+	if timeToDegrade == 0 {
+		timeToDegrade = maxTestDuration.Seconds()
+	}
+
+	return RampUpResult{
+		Framework:     framework,
+		Scenario:      scenario,
+		MaxClients:    maxClients,
+		MaxRPS:        maxRPS,
+		P95AtMax:      p95AtMax,
+		TimeToDegrade: timeToDegrade,
+	}
+}
+
+func percentile(data []float64, p float64) float64 {
+	if len(data) == 0 {
+		return 0
+	}
+	sorted := make([]float64, len(data))
+	copy(sorted, data)
+	sort.Float64s(sorted)
+	idx := int(math.Ceil(float64(len(sorted)) * p))
+	if idx >= len(sorted) {
+		idx = len(sorted) - 1
+	}
+	return sorted[idx]
+}
+
+func printRampUpResults(results []RampUpResult) {
+	fmt.Println("\n=== HTTP/1.1 Ramp-Up Benchmark Results ===")
+	fmt.Printf("%-15s %-10s %12s %12s %12s %15s\n", "Framework", "Scenario", "MaxClients", "MaxRPS", "P95(ms)", "TimeToDegr(s)")
+	fmt.Println(strings.Repeat("-", 85))
+	for _, r := range results {
+		fmt.Printf("%-15s %-10s %12d %12.0f %12.2f %15.1f\n",
+			r.Framework, r.Scenario, r.MaxClients, r.MaxRPS, r.P95AtMax, r.TimeToDegrade)
+	}
+}
+
+func saveRampUpResults(results []RampUpResult) {
+	// JSON
+	f, err := os.Create("rampup_results_h1.json")
+	if err == nil {
+		defer f.Close()
+		enc := json.NewEncoder(f)
+		enc.SetIndent("", "  ")
+		_ = enc.Encode(results)
+	}
+
+	// CSV
+	csvF, err := os.Create("rampup_results_h1.csv")
+	if err == nil {
+		defer csvF.Close()
+		w := csv.NewWriter(csvF)
+		_ = w.Write([]string{"Framework", "Scenario", "MaxClients", "MaxRPS", "P95(ms)", "TimeToDegrade(s)"})
+		for _, r := range results {
+			_ = w.Write([]string{
+				r.Framework,
+				r.Scenario,
+				strconv.Itoa(r.MaxClients),
+				fmt.Sprintf("%.0f", r.MaxRPS),
+				fmt.Sprintf("%.2f", r.P95AtMax),
+				fmt.Sprintf("%.1f", r.TimeToDegrade),
+			})
+		}
+		w.Flush()
+	}
+
+	// Markdown
+	mdF, err := os.Create("rampup_results_h1.md")
+	if err == nil {
+		defer mdF.Close()
+		fmt.Fprintln(mdF, "# HTTP/1.1 Ramp-Up Benchmark Results")
+		fmt.Fprintln(mdF, "")
+		fmt.Fprintln(mdF, "| Framework | Scenario | MaxClients | MaxRPS | P95(ms) | TimeToDegrade(s) |")
+		fmt.Fprintln(mdF, "|-----------|----------|------------|--------|---------|------------------|")
+		for _, r := range results {
+			fmt.Fprintf(mdF, "| %s | %s | %d | %.0f | %.2f | %.1f |\n",
+				r.Framework, r.Scenario, r.MaxClients, r.MaxRPS, r.P95AtMax, r.TimeToDegrade)
+		}
+	}
+
+	log.Println("Results saved to rampup_results_h1.{json,csv,md}")
+}

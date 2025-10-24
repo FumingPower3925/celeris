@@ -1,4 +1,4 @@
-.PHONY: all build test test-unit test-integration test-benchmark test-fuzz test-coverage test-race bench lint coverage docs docs-serve sonar snyk load-test h2spec clean help
+.PHONY: all build test test-unit test-integration test-benchmark test-fuzz test-coverage test-race bench lint coverage docs docs-serve sonar snyk load-test h2spec clean help test-rampup test-rampup-h1 test-rampup-h2
 
 # Default target
 all: lint test build
@@ -28,10 +28,18 @@ test-benchmark:
 	@echo "Running comparative benchmarks..."
 	@cd test/benchmark && go test -bench=. -benchmem -benchtime=3s
 
-# Run incremental ramp-up benchmarks
-test-rampup:
-	@echo "Running incremental ramp-up benchmarks..."
-	@cd test/benchmark/cmd/bench && go build -tags "poll_opt gc_opt" -o bench-rampup . && ./bench-rampup
+# Run incremental ramp-up benchmarks (both HTTP/1.1 and HTTP/2)
+test-rampup: test-rampup-h1 test-rampup-h2
+
+# Run HTTP/1.1 ramp-up benchmarks
+test-rampup-h1:
+	@echo "Running HTTP/1.1 ramp-up benchmarks..."
+	@cd test/benchmark/http1 && go build -tags "poll_opt gc_opt" -o bench-rampup-h1 . && ./bench-rampup-h1
+
+# Run HTTP/2 ramp-up benchmarks (Celeris vs others)
+test-rampup-h2:
+	@echo "Running HTTP/2 ramp-up benchmarks (Celeris vs Iris, Gin, Echo, Chi, net/http)..."
+	@cd test/benchmark/http2 && go build -tags "poll_opt gc_opt" -o bench-rampup-h2 . && ./bench-rampup-h2
 
 # Run fuzz tests (30s each)
 test-fuzz:
@@ -109,10 +117,10 @@ load-test:
 # Run HTTP/2 compliance test
 h2spec:
 	@echo "Starting h2spec compliance test..."
-	@go run -tags "poll_opt gc_opt" ./cmd/test-server > /dev/null 2>&1 & echo $$! > .server.pid
-	@sleep 3
+	@go run -tags "poll_opt gc_opt" ./cmd/test-server > .server.log 2>&1 & echo $$! > .server.pid
+	@sleep 5
 	@echo "Running h2spec..."
-	@h2spec --strict -S -h 127.0.0.1 -p 8080 || true
+	@h2spec --strict -S -h 127.0.0.1 -p 18080 || true
 	@-if [ -f .server.pid ]; then kill `cat .server.pid` 2>/dev/null || true; rm -f .server.pid; fi
 
 # Clean build artifacts
@@ -127,7 +135,7 @@ clean:
 
 # Display help
 help:
-	@echo "Celeris - High-Performance HTTP/2 Server"
+	@echo "Celeris - High-Performance HTTP/1.1 & HTTP/2 Server"
 	@echo ""
 	@echo "Available targets:"
 	@echo "  make build             - Build the example server"
@@ -135,7 +143,9 @@ help:
 	@echo "  make test-unit         - Run unit tests only"
 	@echo "  make test-integration  - Run integration tests"
 	@echo "  make test-benchmark    - Run comparative benchmarks"
-	@echo "  make test-rampup       - Run incremental ramp-up benchmarks"
+	@echo "  make test-rampup       - Run ramp-up benchmarks (both H1 and H2)"
+	@echo "  make test-rampup-h1    - Run HTTP/1.1 ramp-up benchmarks"
+	@echo "  make test-rampup-h2    - Run HTTP/2 ramp-up benchmarks (Celeris vs others)"
 	@echo "  make test-fuzz         - Run fuzz tests"
 	@echo "  make test-coverage     - Generate test coverage report"
 	@echo "  make test-race         - Run tests with race detector"

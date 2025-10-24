@@ -27,11 +27,10 @@ func TestConcurrentRequests(t *testing.T) {
 	config.Multicore = true
 	server := celeris.New(config)
 
-	go func() {
-		server.ListenAndServe(router)
-	}()
-
-	time.Sleep(100 * time.Millisecond)
+	go func() { _ = server.ListenAndServe(router) }()
+	if err := waitForServer(config.Addr, 2*time.Second); err != nil {
+		t.Fatalf("Server error: %v", err)
+	}
 	defer server.Stop(context.Background())
 
 	client := createHTTP2Client()
@@ -91,7 +90,7 @@ func TestRaceConditions(t *testing.T) {
 	router := celeris.NewRouter()
 	router.GET("/increment/:key", func(ctx *celeris.Context) error {
 		key := celeris.Param(ctx, "key")
-		
+
 		mu.Lock()
 		sharedMap[key]++
 		value := sharedMap[key]
@@ -105,11 +104,10 @@ func TestRaceConditions(t *testing.T) {
 	config.Multicore = true
 	server := celeris.New(config)
 
-	go func() {
-		server.ListenAndServe(router)
-	}()
-
-	time.Sleep(100 * time.Millisecond)
+	go func() { _ = server.ListenAndServe(router) }()
+	if err := waitForServer(config.Addr, 2*time.Second); err != nil {
+		t.Fatalf("Server error: %v", err)
+	}
 	defer server.Stop(context.Background())
 
 	client := createHTTP2Client()

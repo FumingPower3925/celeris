@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-// Config holds the HTTP/2 server configuration options.
+// Config holds the server configuration options for both HTTP/1.1 and HTTP/2.
 type Config struct {
 	Addr                 string        // Server address to bind to
 	Multicore            bool          // Enable multicore mode for better performance
@@ -21,6 +21,8 @@ type Config struct {
 	InitialWindowSize    uint32        // Initial HTTP/2 flow control window size
 	Logger               *log.Logger   // Logger for server events
 	DisableKeepAlive     bool          // Disable HTTP keep-alive
+	EnableH1             bool          // Enable HTTP/1.1 support (default true)
+	EnableH2             bool          // Enable HTTP/2 support (default true)
 }
 
 // DefaultConfig returns a Config with sensible default values.
@@ -39,6 +41,8 @@ func DefaultConfig() Config {
 		InitialWindowSize:    65535,
 		Logger:               log.Default(),
 		DisableKeepAlive:     false,
+		EnableH1:             true, // Enable HTTP/1.1 by default
+		EnableH2:             true, // Enable HTTP/2 by default
 	}
 }
 
@@ -61,6 +65,10 @@ func (c *Config) Validate() error {
 	}
 	if c.Logger == nil {
 		c.Logger = log.Default()
+	}
+	// At least one protocol must be enabled
+	if !c.EnableH1 && !c.EnableH2 {
+		c.EnableH2 = true // Default to HTTP/2 if both disabled
 	}
 	return nil
 }

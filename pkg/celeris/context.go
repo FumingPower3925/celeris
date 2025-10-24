@@ -15,7 +15,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/albertbausili/celeris/internal/stream"
+	"github.com/albertbausili/celeris/internal/h2/stream"
 )
 
 // Context represents an HTTP/2 request-response context.
@@ -31,6 +31,7 @@ type Context struct {
 	writeResponse   func(streamID uint32, status int, headers [][2]string, body []byte) error
 	pushPromise     func(streamID uint32, path string, headers [][2]string) error
 	values          map[string]interface{}
+	hasFlushed      bool
 	// cached pseudo-headers for fast access
 	method    string
 	path      string
@@ -121,12 +122,9 @@ func newContext(ctx context.Context, s *stream.Stream, writeResponse func(uint32
 		values: nil,
 	}
 
-	// Populate minimal headers directly from stream without copying the slice
+	// Populate headers directly from stream
 	s.ForEachHeader(func(name, value string) {
-		switch name {
-		case ":method", ":path", ":scheme", ":authority", "content-length", "content-type", "x-request-id":
-			c.headers.Set(name, value)
-		}
+		// Cache selected pseudo-headers for fast access
 		switch name {
 		case ":method":
 			c.method = value
@@ -137,6 +135,9 @@ func newContext(ctx context.Context, s *stream.Stream, writeResponse func(uint32
 		case ":authority":
 			c.authority = value
 		}
+		// Store all non-pseudo headers; also store pseudo-headers for completeness
+		// Header struct normalizes to lowercase
+		c.headers.Set(name, value)
 	})
 
 	return c
@@ -222,40 +223,64 @@ func (c *Context) WriteString(s string) (int, error) {
 
 // JSON sends a JSON response with the given status code.
 func (c *Context) JSON(status int, v interface{}) error {
-	c.SetStatus(status)
-	c.SetHeader("content-type", "application/json")
-
+	c.writeMu.Lock()
+	c.statusCode = status
+	c.responseHeaders.Set("content-type", "application/json")
 	data, err := json.Marshal(v)
+	if err != nil {
+		c.writeMu.Unlock()
+		return err
+	}
+	c.responseHeaders.Set("content-length", strconv.Itoa(len(data)))
+	_, err = c.responseBody.Write(data)
+	c.writeMu.Unlock()
 	if err != nil {
 		return err
 	}
-
-	_, err = c.Write(data)
-	return err
+	return c.flush()
 }
 
 // String sends a formatted text response with the given status code.
 func (c *Context) String(status int, format string, values ...interface{}) error {
-	c.SetStatus(status)
-	c.SetHeader("content-type", "text/plain; charset=utf-8")
-	_, err := fmt.Fprintf(c.responseBody, format, values...)
-	return err
+	c.writeMu.Lock()
+	c.statusCode = status
+	c.responseHeaders.Set("content-type", "text/plain; charset=utf-8")
+	s := fmt.Sprintf(format, values...)
+	c.responseHeaders.Set("content-length", strconv.Itoa(len(s)))
+	_, err := c.responseBody.WriteString(s)
+	c.writeMu.Unlock()
+	if err != nil {
+		return err
+	}
+	return c.flush()
 }
 
 // HTML sends an HTML response with the given status code.
 func (c *Context) HTML(status int, html string) error {
-	c.SetStatus(status)
-	c.SetHeader("content-type", "text/html; charset=utf-8")
-	_, err := c.WriteString(html)
-	return err
+	c.writeMu.Lock()
+	c.statusCode = status
+	c.responseHeaders.Set("content-type", "text/html; charset=utf-8")
+	c.responseHeaders.Set("content-length", strconv.Itoa(len(html)))
+	_, err := c.responseBody.WriteString(html)
+	c.writeMu.Unlock()
+	if err != nil {
+		return err
+	}
+	return c.flush()
 }
 
 // Data sends a response with custom content type and data.
 func (c *Context) Data(status int, contentType string, data []byte) error {
-	c.SetStatus(status)
-	c.SetHeader("content-type", contentType)
-	_, err := c.Write(data)
-	return err
+	c.writeMu.Lock()
+	c.statusCode = status
+	c.responseHeaders.Set("content-type", contentType)
+	c.responseHeaders.Set("content-length", strconv.Itoa(len(data)))
+	_, err := c.responseBody.Write(data)
+	c.writeMu.Unlock()
+	if err != nil {
+		return err
+	}
+	return c.flush()
 }
 
 // NoContent sends a response with no body content.
@@ -280,12 +305,11 @@ func (c *Context) flush() error {
 	}
 	err := c.writeResponse(c.StreamID, c.statusCode, c.responseHeaders.All(), c.responseBody.Bytes())
 	c.responseBody.Reset()
-	responseBufPool.Put(c.responseBody)
+	c.hasFlushed = true
 	if c.values != nil {
 		for k := range c.values {
 			delete(c.values, k)
 		}
-		ctxValuesPool.Put(c.values)
 		c.values = nil
 	}
 	return err
@@ -364,8 +388,18 @@ func (c *Context) Flush() error {
 	if c.writeResponse == nil {
 		return fmt.Errorf("no write response function")
 	}
-	err := c.writeResponse(c.StreamID, c.statusCode, c.responseHeaders.All(), c.responseBody.Bytes())
+	// Copy current buffer to avoid losing previous chunks when reusing buffer
+	data := append([]byte(nil), c.responseBody.Bytes()...)
+	// Ensure Transfer-Encoding semantics for streaming: no Content-Length once streaming starts
+	// Remove content-length header to prevent peers from expecting a fixed length
+	c.responseHeaders.Del("content-length")
+	// Mark underlying stream as streaming to prevent END_STREAM on intermediate chunks
+	if c.stream != nil {
+		c.stream.IsStreaming = true
+	}
+	err := c.writeResponse(c.StreamID, c.statusCode, c.responseHeaders.All(), data)
 	c.responseBody.Reset()
+	c.hasFlushed = true
 	return err
 }
 

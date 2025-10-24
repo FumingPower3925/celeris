@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/albertbausili/celeris/internal/stream"
+	"github.com/albertbausili/celeris/internal/h2/stream"
 )
 
 func TestPrometheus_Middleware(t *testing.T) {
