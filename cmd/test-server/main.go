@@ -30,9 +30,8 @@ func main() {
 
 	config := celeris.DefaultConfig()
 	config.Addr = ":18080"
-	// Set concurrency limit for h2spec testing
-	// Note: h2spec concurrency test will exceed this to verify refusal
-	config.MaxConcurrentStreams = 100
+	// Set concurrency limit - h2spec may expect exclusive upper bound
+	config.MaxConcurrentStreams = 99
 
 	server := celeris.New(config)
 

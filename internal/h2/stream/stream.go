@@ -1095,13 +1095,8 @@ func (p *Processor) handleWindowUpdate(f *http2.WindowUpdateFrame) error {
 			return fmt.Errorf("WINDOW_UPDATE with 0 increment")
 		}
 		// Stream-level WINDOW_UPDATE with zero increment is a protocol error (RFC 7540 §6.9)
-		// Send RST_STREAM to reset the stream
-		p.connWriter.MarkStreamClosed(f.StreamID)
-		if p.connWriter != nil {
-			_ = p.connWriter.WriteRSTStreamPriority(f.StreamID, http2.ErrCodeProtocol)
-		} else {
-			_ = p.writer.WriteRSTStream(f.StreamID, http2.ErrCodeProtocol)
-		}
+		// Per spec, this should be treated as a connection error, not stream error
+		_ = p.SendGoAway(p.manager.GetLastStreamID(), http2.ErrCodeProtocol, []byte("WINDOW_UPDATE with 0 increment on stream"))
 		if flusher, ok := p.writer.(interface{ Flush() error }); ok {
 			_ = flusher.Flush()
 		}

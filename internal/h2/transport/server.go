@@ -1392,12 +1392,14 @@ func (c *Connection) SendGoAway(lastStreamID uint32, code http2.ErrCode, debug [
 
 	c.logger.Printf("Sent GOAWAY frame: code=%v, lastStream=%d", code, lastStreamID)
 
-	// Close the connection for connection-level errors (GOAWAY was already flushed and woken)
+	// Signal connection should close for connection-level errors
+	// Return error so OnTraffic can return gnet.Close action
 	switch code {
 	case http2.ErrCodeProtocol, http2.ErrCodeFrameSize, http2.ErrCodeStreamClosed, http2.ErrCodeCompression, http2.ErrCodeFlowControl:
-		// Close immediately - Wake() was already called, so GOAWAY should be in flight
 		c.logger.Printf("Closing connection after GOAWAY with code=%v", code)
-		_ = c.conn.Close()
+		// Set a flag that HandleData can check to return error
+		c.sentGoAway.Store(true)
+		_ = c.conn.Close()  // Also call Close() directly
 	}
 	return nil
 }
