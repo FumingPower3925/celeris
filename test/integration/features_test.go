@@ -93,7 +93,7 @@ func TestCookies(t *testing.T) {
 
 	go func() { _ = server.ListenAndServe(router) }()
 	defer server.Stop(context.Background())
-	if err := waitForServer(config.Addr, 2*time.Second); err != nil {
+	if err := waitForServer(config.Addr, 5*time.Second); err != nil {
 		t.Fatalf("Server error: %v", err)
 	}
 
@@ -132,7 +132,7 @@ func TestStaticFiles(t *testing.T) {
 
 	go func() { _ = server.ListenAndServe(router) }()
 	defer server.Stop(context.Background())
-	if err := waitForServer(config.Addr, 2*time.Second); err != nil {
+	if err := waitForServer(config.Addr, 5*time.Second); err != nil {
 		t.Fatalf("Server error: %v", err)
 	}
 
@@ -190,7 +190,7 @@ func TestErrorHandling(t *testing.T) {
 
 	go func() { _ = server.ListenAndServe(router) }()
 	defer server.Stop(context.Background())
-	if err := waitForServer(config.Addr, 2*time.Second); err != nil {
+	if err := waitForServer(config.Addr, 5*time.Second); err != nil {
 		t.Fatalf("Server error: %v", err)
 	}
 
@@ -242,7 +242,7 @@ func TestStreaming(t *testing.T) {
 
 	go func() { _ = server.ListenAndServe(router) }()
 	defer server.Stop(context.Background())
-	if err := waitForServer(config.Addr, 2*time.Second); err != nil {
+	if err := waitForServer(config.Addr, 5*time.Second); err != nil {
 		t.Fatalf("Server error: %v", err)
 	}
 

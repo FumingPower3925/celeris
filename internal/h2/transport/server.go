@@ -1127,15 +1127,10 @@ func (c *Connection) WriteResponse(streamID uint32, status int, headers [][2]str
 		return fmt.Errorf("failed to write headers: %w", err)
 	}
 
-	// Flush HEADERS immediately
-	if err := c.writer.Flush(); err != nil {
-		return err
-	}
-	_ = c.conn.Wake(nil)
-
-	// Mark headers as sent and streaming state before any early return paths
+	// Mark headers as sent BEFORE flushing
 	if st, ok := c.processor.GetManager().GetStream(streamID); ok {
 		if st.ClosedByReset {
+			c.writeMu.Unlock()
 			return fmt.Errorf("stream %d was reset by peer", streamID)
 		}
 		st.HeadersSent = true
@@ -1143,15 +1138,25 @@ func (c *Connection) WriteResponse(streamID uint32, status int, headers [][2]str
 		// Don't set IsStreaming for normal responses - reserve it for actual streaming
 	}
 
-	// If there is a body, write DATA frames respecting flow control
+	// If there is a body, buffer it and write DATA BEFORE releasing writeMu
 	if len(body) > 0 {
 		// Buffer the body first
 		if s, ok := c.processor.GetManager().GetStream(streamID); ok && s.OutboundBuffer != nil {
 			_, _ = s.OutboundBuffer.Write(body)
 			s.OutboundEndStream = true
 		}
-		// Immediately try to flush what we can send with current windows
-		c.processor.FlushBufferedData(streamID)
+		// Flush buffered data while still holding writeMu to preserve frame order
+		c.processor.FlushBufferedDataLocked(streamID)
+	}
+
+	// Flush all frames (HEADERS + DATA) in one batch
+	if err := c.writer.Flush(); err != nil {
+		return err
+	}
+	_ = c.conn.Wake(nil)
+
+	// Body was already handled above; early return to avoid duplicate flush
+	if len(body) > 0 {
 		return nil
 	}
 

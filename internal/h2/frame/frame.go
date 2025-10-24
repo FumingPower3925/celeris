@@ -221,9 +221,6 @@ func (w *Writer) WriteHeaders(streamID uint32, endStream bool, headerBlock []byt
 func (w *Writer) WriteData(streamID uint32, endStream bool, data []byte) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	// DEBUG: log data write shape (length and endStream)
-	// Note: avoid printing payload to reduce noise
-	fmt.Printf("[H2][frame] WriteData sid=%d end=%v len=%d\n", streamID, endStream, len(data))
 	// Avoid emitting zero-length DATA frames without END_STREAM, which can trip h2spec
 	if len(data) == 0 && !endStream {
 		return nil

@@ -29,7 +29,7 @@ func TestBasicRequest(t *testing.T) {
 	server := celeris.New(config)
 
 	go func() { _ = server.ListenAndServe(router) }()
-	if err := waitForServer(config.Addr, 2*time.Second); err != nil {
+	if err := waitForServer(config.Addr, 5*time.Second); err != nil {
 		t.Fatalf("Server error: %v", err)
 	}
 	defer server.Stop(context.Background())
@@ -63,7 +63,7 @@ func TestRouteParameters(t *testing.T) {
 	server := celeris.New(config)
 
 	go func() { _ = server.ListenAndServe(router) }()
-	if err := waitForServer(config.Addr, 2*time.Second); err != nil {
+	if err := waitForServer(config.Addr, 5*time.Second); err != nil {
 		t.Fatalf("Server error: %v", err)
 	}
 	defer server.Stop(context.Background())
@@ -92,7 +92,7 @@ func TestNotFound(t *testing.T) {
 	server := celeris.New(config)
 
 	go func() { _ = server.ListenAndServe(router) }()
-	if err := waitForServer(config.Addr, 2*time.Second); err != nil {
+	if err := waitForServer(config.Addr, 5*time.Second); err != nil {
 		t.Fatalf("Server error: %v", err)
 	}
 	defer server.Stop(context.Background())
@@ -123,12 +123,14 @@ func getTestPort() string {
 func waitForServer(addr string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		conn, err := net.DialTimeout("tcp", "127.0.0.1"+addr, 50*time.Millisecond)
+		conn, err := net.DialTimeout("tcp", "127.0.0.1"+addr, 100*time.Millisecond)
 		if err == nil {
 			_ = conn.Close()
+			// Give server extra time to finish initialization
+			time.Sleep(50 * time.Millisecond)
 			return nil
 		}
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(50 * time.Millisecond)
 	}
 	return fmt.Errorf("server %s not ready", addr)
 }

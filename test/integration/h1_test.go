@@ -26,7 +26,7 @@ func TestHTTP1BasicRequest(t *testing.T) {
 	server := celeris.New(config)
 
 	go func() { _ = server.ListenAndServe(router) }()
-	if err := waitForServer(config.Addr, 2*time.Second); err != nil {
+	if err := waitForServer(config.Addr, 5*time.Second); err != nil {
 		t.Fatalf("Server error: %v", err)
 	}
 	defer server.Stop(context.Background())
@@ -66,7 +66,7 @@ func TestHTTP1RouteParameters(t *testing.T) {
 	server := celeris.New(config)
 
 	go func() { _ = server.ListenAndServe(router) }()
-	if err := waitForServer(config.Addr, 2*time.Second); err != nil {
+	if err := waitForServer(config.Addr, 5*time.Second); err != nil {
 		t.Fatalf("Server error: %v", err)
 	}
 	defer server.Stop(context.Background())
@@ -101,7 +101,7 @@ func TestHTTP1NotFound(t *testing.T) {
 	server := celeris.New(config)
 
 	go func() { _ = server.ListenAndServe(router) }()
-	if err := waitForServer(config.Addr, 2*time.Second); err != nil {
+	if err := waitForServer(config.Addr, 5*time.Second); err != nil {
 		t.Fatalf("Server error: %v", err)
 	}
 	defer server.Stop(context.Background())

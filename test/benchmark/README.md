@@ -1,72 +1,81 @@
-# Celeris Benchmark Suite
+# Celeris Benchmarks
 
-This directory contains comparative benchmarks for Celeris against other popular Go web frameworks.
+This directory contains benchmarks for both HTTP/1.1 and HTTP/2 implementations.
+
+## Structure
+
+```
+test/benchmark/
+├── http1/          # HTTP/1.1 ramp-up benchmarks
+│   ├── main.go     # Benchmark runner comparing Celeris vs other frameworks
+│   ├── go.mod      # Dependencies
+│   └── results/    # Output: CSV, JSON, MD reports
+├── http2/          # HTTP/2 ramp-up benchmarks  
+│   ├── main.go     # Benchmark runner with h2c support
+│   ├── go.mod      # Dependencies
+│   └── results/    # Output: CSV, JSON, MD reports
+└── README.md       # This file
+```
 
 ## Running Benchmarks
 
-To run all benchmarks:
-
+### HTTP/1.1 Benchmarks
 ```bash
-cd test/benchmark
-go test -bench=. -benchmem -benchtime=5s
+make test-rampup-h1
 ```
 
-To run specific benchmarks:
+Tests Celeris HTTP/1.1 against:
+- net/http (stdlib)
+- Gin
+- Echo
+- Chi
+- Fiber
 
+### HTTP/2 Benchmarks
 ```bash
-go test -bench=BenchmarkFrameworks/Celeris -benchmem
+make test-rampup-h2
 ```
 
-To generate a comparison table:
+Tests Celeris HTTP/2 against:
+- net/http with h2c
+- Gin with h2c
+- Echo with h2c
+- Chi with h2c
+- Iris with h2c
 
-```bash
-go test -bench=. -benchmem -benchtime=5s | tee results.txt
-```
+## Test Scenarios
 
-## Benchmark Categories
+Each framework is tested with three scenarios:
 
-1. **Simple Request** - Basic string response
-2. **JSON Response** - JSON encoding and response
-3. **Route Parameters** - Parameter extraction from routes
+1. **simple**: Plain text response (`/`)
+2. **json**: JSON response (`/json`)
+3. **params**: Parameterized route with JSON (`/user/:userId/post/:postId`)
 
-## Frameworks Compared
+## Methodology
 
-- **Celeris** - This framework (HTTP/2 native)
-- **net/http** - Go standard library with HTTP/2
-- **Fiber** - Fast Express-inspired framework (planned)
-- **Gin** - High-performance framework (planned)
-- **Echo** - Minimalist framework (planned)
-- **Chi** - Lightweight router (planned)
+- **Ramp-Up Test**: Gradually increases concurrent clients until p95 latency exceeds 100ms
+- **Client Addition Rate**: 1 client every 25ms (40 clients/second)
+- **Measurement Window**: 1 second
+- **Degradation Threshold**: p95 > 100ms
+- **Max Test Duration**: 30 seconds
+
+## Metrics
+
+- **MaxClients**: Peak concurrent clients before degradation
+- **MaxRPS**: Maximum requests/second achieved
+- **P95AtMax**: 95th percentile latency (ms) at maximum RPS
+- **TimeToDegrade**: Time (seconds) until performance degraded
+
+## Output
+
+Results are saved in three formats:
+- **JSON**: `rampup_results_h1.json` / `rampup_results.json`
+- **CSV**: `rampup_results_h1.csv` / `rampup_results.csv`
+- **Markdown**: `rampup_results_h1.md` / `rampup_results.md`
 
 ## Notes
 
-- Tests are randomized to prevent order effects
-- Each benchmark uses unique ports to avoid conflicts
-- HTTP/2 is used consistently across all frameworks for fair comparison
-- Parallel execution is used to simulate realistic load
-
-## Understanding Results
-
-The benchmarks measure:
-- **ns/op** - Nanoseconds per operation (lower is better)
-- **B/op** - Bytes allocated per operation (lower is better)
-- **allocs/op** - Number of allocations per operation (lower is better)
-
-## Adding More Frameworks
-
-To add a new framework to the comparison:
-
-1. Add the framework as a dependency in `go.mod`
-2. Create benchmark functions following the naming pattern
-3. Add to the randomized test suite in `comparative_test.go`
-4. Update this README with the new framework
-
-## Example Output
-
-```
-BenchmarkFrameworks/Celeris_SimpleRequest-8         100000      12345 ns/op      1234 B/op      12 allocs/op
-BenchmarkFrameworks/NetHTTP_SimpleRequest-8         90000       13456 ns/op      1345 B/op      13 allocs/op
-```
-
-Lower numbers indicate better performance.
-
+- Logs are silenced during benchmarks for clean output
+- HTTP/1.1 uses standard TCP
+- HTTP/2 uses h2c (cleartext) for fair comparison without TLS overhead
+- Celeris automatically detects protocol and routes to appropriate handler

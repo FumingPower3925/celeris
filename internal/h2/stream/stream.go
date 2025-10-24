@@ -667,8 +667,7 @@ func (p *Processor) handleHeaders(_ context.Context, f *http2.HeadersFrame) erro
 	existingStream, exists := p.manager.GetStream(f.StreamID)
 	// DEBUG: log entry into handleHeaders with key flags
 	fh := f.Header()
-	fmt.Printf("[H2][proc] handleHeaders enter sid=%d exists=%v flags=0x%x endHeaders=%v endStream=%v\n",
-		f.StreamID, exists, fh.Flags, f.HeadersEnded(), f.StreamEnded())
+	_ = fh // avoid unused warning
 
 	// If END_HEADERS is missing, remember that we're in a header block so that
 	// the connection layer can detect mid-header violations. Do NOT return yet;
@@ -697,13 +696,13 @@ func (p *Processor) handleHeaders(_ context.Context, f *http2.HeadersFrame) erro
 		p.manager.mu.RLock()
 		lastClientStream := p.manager.lastClientStream
 		p.manager.mu.RUnlock()
-		fmt.Printf("[H2][proc] handleHeaders new-stream sid=%d lastClient=%d\n", f.StreamID, lastClientStream)
+		_ = lastClientStream // avoid unused warning
 
 		// If stream ID <= lastClientStream, this is attempting to reuse a closed stream ID
 		// Per RFC 7540 §5.1.1, this should be treated as STREAM_CLOSED, not PROTOCOL_ERROR
 		if f.StreamID <= lastClientStream {
 			// Treat reuse of a closed stream ID as connection error per h2spec 5.1.12
-			fmt.Printf("[H2][proc] handleHeaders reused closed id sid=%d lastClient=%d -> GOAWAY STREAM_CLOSED\n", f.StreamID, lastClientStream)
+			// Reused closed stream ID
 			_ = p.SendGoAway(lastClientStream, http2.ErrCodeStreamClosed, []byte("HEADERS on closed stream (reused id)"))
 			return fmt.Errorf("HEADERS frame on closed stream %d (last stream: %d)", f.StreamID, lastClientStream)
 		}
@@ -723,7 +722,7 @@ func (p *Processor) handleHeaders(_ context.Context, f *http2.HeadersFrame) erro
 		p.manager.mu.Lock()
 		if f.StreamID > p.manager.lastClientStream {
 			p.manager.lastClientStream = f.StreamID
-			fmt.Printf("[H2][proc] handleHeaders update lastClientStream -> %d\n", p.manager.lastClientStream)
+			// Updated lastClientStream
 		}
 		p.manager.mu.Unlock()
 	}
@@ -735,13 +734,13 @@ func (p *Processor) handleHeaders(_ context.Context, f *http2.HeadersFrame) erro
 		switch state {
 		case StateClosed:
 			// Treat as connection error: send GOAWAY and let connection layer handle close timing
-			fmt.Printf("[H2][proc] handleHeaders existing CLOSED sid=%d -> GOAWAY STREAM_CLOSED\n", f.StreamID)
+			// HEADERS on closed stream
 			_ = p.SendGoAway(p.manager.GetLastStreamID(), http2.ErrCodeStreamClosed, []byte("HEADERS on closed stream (state closed)"))
 			return fmt.Errorf("HEADERS frame on closed stream %d", f.StreamID)
 		case StateHalfClosedRemote:
 			// HEADERS on half-closed (remote) is invalid (no more frames should be sent by peer)
 			// Per RFC 7540 §5.1, this should be a connection error (GOAWAY), not a stream error
-			fmt.Printf("[H2][proc] handleHeaders existing HALF_CLOSED_REMOTE sid=%d -> GOAWAY STREAM_CLOSED\n", f.StreamID)
+			// HEADERS on half-closed stream
 			_ = p.SendGoAway(p.manager.GetLastStreamID(), http2.ErrCodeStreamClosed, []byte("HEADERS on half-closed stream"))
 			return fmt.Errorf("HEADERS frame on half-closed (remote) stream %d", f.StreamID)
 		}
@@ -837,17 +836,11 @@ func (p *Processor) handleHeaders(_ context.Context, f *http2.HeadersFrame) erro
 	stream, ok := p.manager.TryOpenStream(f.StreamID)
 	if !ok {
 		// Refuse the stream per RFC 7540 §5.1.2
-		if f.StreamID > 195 {
-			fmt.Printf("[DEBUG] Refusing stream %d (activeStreams=%d, max=%d)\n",
-				f.StreamID, p.manager.CountActiveStreams(), p.manager.GetMaxConcurrentStreams())
-		}
+		// Stream refused due to concurrency limit
 		_ = p.sendRSTStreamAndMarkClosed(f.StreamID, http2.ErrCodeRefusedStream)
 		return fmt.Errorf("exceeds MAX_CONCURRENT_STREAMS")
 	}
-	if f.StreamID > 195 {
-		fmt.Printf("[DEBUG] Accepted stream %d (activeStreams=%d, max=%d)\n",
-			f.StreamID, p.manager.CountActiveStreams(), p.manager.GetMaxConcurrentStreams())
-	}
+	// Stream accepted
 
 	// Validate stream state
 	if err := validateStreamState(stream.GetState(), http2.FrameHeaders, f.StreamEnded()); err != nil {
@@ -1175,22 +1168,16 @@ func (p *Processor) handleWindowUpdate(f *http2.WindowUpdateFrame) error {
 func (p *Processor) flushBufferedData(streamID uint32) {
 	s, ok := p.manager.GetStream(streamID)
 	if !ok || s.OutboundBuffer == nil {
-		if streamID == 1 {
-			fmt.Printf("[DEBUG] flushBufferedData stream 1: not found or nil buffer (ok=%v)\n", ok)
-		}
+	// Stream not found or buffer nil
 		return
 	}
-	if streamID == 1 && s.OutboundBuffer.Len() > 0 {
-		fmt.Printf("[DEBUG] flushBufferedData stream 1: attempting flush, bufLen=%d\n", s.OutboundBuffer.Len())
-	}
+	// Attempting to flush buffered data
 	// Do not flush if peer reset the stream
 	s.mu.RLock()
 	wasReset := s.ClosedByReset
 	s.mu.RUnlock()
 	if wasReset {
-		if streamID == 1 {
-			fmt.Printf("[DEBUG] flushBufferedData stream 1: bail - was reset\n")
-		}
+		// Stream was reset, bail
 		return
 	}
 	// Avoid sending END_STREAM if this stream is marked as streaming
@@ -1200,18 +1187,14 @@ func (p *Processor) flushBufferedData(streamID uint32) {
 	headersSent := s.HeadersSent
 	s.mu.RUnlock()
 	if !headersSent {
-		if streamID == 1 {
-			fmt.Printf("[DEBUG] flushBufferedData stream 1: bail - headers not sent\n")
-		}
+		// Headers not sent yet, bail
 		return
 	}
 	if s.OutboundBuffer.Len() == 0 {
 		return
 	}
 	connWin, strWin, maxFrame := p.manager.GetSendWindowsAndMaxFrame(streamID)
-	if streamID == 1 {
-		fmt.Printf("[DEBUG] flushBufferedData stream 1: windows conn=%d str=%d max=%d\n", connWin, strWin, maxFrame)
-	}
+	// Check flow control windows
 	if maxFrame == 0 {
 		maxFrame = 16384
 	}
@@ -1254,6 +1237,12 @@ func (p *Processor) flushBufferedData(streamID uint32) {
 // FlushBufferedData exposes flushBufferedData for external callers that need
 // to attempt a send (e.g., immediately after HEADERS are flushed).
 func (p *Processor) FlushBufferedData(streamID uint32) {
+	p.flushBufferedData(streamID)
+}
+
+// FlushBufferedDataLocked is called when the caller already holds Connection.writeMu
+// to preserve frame ordering in concurrent WriteResponse calls.
+func (p *Processor) FlushBufferedDataLocked(streamID uint32) {
 	p.flushBufferedData(streamID)
 }
 
