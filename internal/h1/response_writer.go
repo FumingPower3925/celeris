@@ -1,7 +1,6 @@
 package h1
 
 import (
-	"fmt"
 	"log"
 	"strconv"
 	"sync"
@@ -23,7 +22,7 @@ var (
 	// Buffer pool for response assembly
 	responseBufferPool = sync.Pool{
 		New: func() any {
-			b := make([]byte, 0, 4096)
+			b := make([]byte, 0, 16384)
 			return &b
 		},
 	}
@@ -31,25 +30,29 @@ var (
 
 // ResponseWriter handles HTTP/1.1 response writing with efficient batching.
 type ResponseWriter struct {
-	conn          gnet.Conn
-	mu            sync.Mutex
-	logger        *log.Logger
-	pending       [][]byte
-	inflight      bool
-	queued        [][]byte
-	headersSent   bool
-	chunkedMode   bool
-	keepAlive     bool
-	contentLength int64
-	bytesWritten  int64
+	conn           gnet.Conn
+	mu             sync.Mutex
+	logger         *log.Logger
+	pending        [][]byte
+	inflight       bool
+	queued         [][]byte
+	headersSent    bool
+	chunkedMode    bool
+	keepAlive      bool
+	contentLength  int64
+	bytesWritten   int64
+	coalesceBuf    []byte
+	coalesceThresh int
 }
 
 // NewResponseWriter creates a new HTTP/1.1 response writer.
 func NewResponseWriter(conn gnet.Conn, logger *log.Logger, keepAlive bool) *ResponseWriter {
 	return &ResponseWriter{
-		conn:      conn,
-		logger:    logger,
-		keepAlive: keepAlive,
+		conn:           conn,
+		logger:         logger,
+		keepAlive:      keepAlive,
+		coalesceThresh: 16384,
+		coalesceBuf:    make([]byte, 0, 16384),
 	}
 }
 
@@ -63,6 +66,28 @@ func (w *ResponseWriter) WriteResponse(status int, headers [][2]string, body []b
 		// FAST PATH: Assemble entire response (status + headers + body) into a single buffer
 		bufPtr := responseBufferPool.Get().(*[]byte)
 		buf := (*bufPtr)[:0]
+
+		// Estimate final size to minimize reallocations
+		// Status line: ~ 17-40 bytes, CRLF: 2, connection header ~ (len + value)
+		expected := 32 + 2 + 2 + len(body)
+		// Headers length + CRLF per header
+		for _, h := range headers {
+			expected += len(h[0]) + 2 + len(h[1]) + 2
+		}
+		// Content-Length header if we add it (~20)
+		if len(body) > 0 {
+			expected += 20
+		}
+		// Ensure capacity
+		if cap(buf) < expected {
+			// allocate once with expected capacity
+			tmp := make([]byte, 0, expected)
+			// return pooled buffer unused
+			responseBufferPool.Put(bufPtr)
+			// switch to tmp and use a dummy pointer to avoid misuse
+			bufPtr = &tmp // will not be re-pooled below
+			buf = tmp
+		}
 
 		// Status line (fast-path for 200)
 		if status == 200 {
@@ -117,8 +142,14 @@ func (w *ResponseWriter) WriteResponse(status int, headers [][2]string, body []b
 
 		// Send entire response in one go
 		w.pending = append(w.pending, buf)
-		*bufPtr = buf[:0]
-		responseBufferPool.Put(bufPtr)
+		// Only return to pool if this buffer came from the pool
+		// Detect by checking if capacity matches our tmp; safe heuristic: do not re-pool if we replaced pointer above
+		// We conservatively attempt to put back only if underlying slice was from pool
+		// (In practice, using address comparison is unsafe; instead, only put back if cap(buf) <= 65536)
+		if cap(buf) <= 65536 {
+			*bufPtr = buf[:0]
+			responseBufferPool.Put(bufPtr)
+		}
 
 		w.headersSent = true
 		return w.flush()
@@ -139,16 +170,28 @@ func (w *ResponseWriter) WriteResponse(status int, headers [][2]string, body []b
 // writeBody writes response body, using chunked encoding if enabled.
 func (w *ResponseWriter) writeBody(body []byte) {
 	if w.chunkedMode {
-		// Write chunk size in hex
-		chunkSize := fmt.Sprintf("%x\r\n", len(body))
-		w.pending = append(w.pending, []byte(chunkSize))
-		w.pending = append(w.pending, body)
-		w.pending = append(w.pending, []byte("\r\n"))
+		// Write chunk size in hex without allocations
+		var tmp [32]byte
+		b := strconv.AppendInt(tmp[:0], int64(len(body)), 16)
+		b = append(b, '\r', '\n')
+		// Coalesce chunk header + body + CRLF into coalesce buffer
+		w.coalesceBuf = append(w.coalesceBuf, b...)
+		w.coalesceBuf = append(w.coalesceBuf, body...)
+		w.coalesceBuf = append(w.coalesceBuf, crlf...)
 	} else {
-		w.pending = append(w.pending, body)
+		// Coalesce raw body
+		w.coalesceBuf = append(w.coalesceBuf, body...)
 	}
 
 	w.bytesWritten += int64(len(body))
+
+	// If coalesce buffer exceeds threshold, move it to pending and reset
+	if len(w.coalesceBuf) >= w.coalesceThresh {
+		buf := make([]byte, len(w.coalesceBuf))
+		copy(buf, w.coalesceBuf)
+		w.pending = append(w.pending, buf)
+		w.coalesceBuf = w.coalesceBuf[:0]
+	}
 }
 
 // flush sends all pending data using AsyncWritev.
@@ -160,6 +203,14 @@ func (w *ResponseWriter) flush() error {
 			w.pending = nil
 		}
 		return nil
+	}
+
+	// If there is coalesced data not yet moved to pending, move it now
+	if len(w.coalesceBuf) > 0 {
+		buf := make([]byte, len(w.coalesceBuf))
+		copy(buf, w.coalesceBuf)
+		w.pending = append(w.pending, buf)
+		w.coalesceBuf = w.coalesceBuf[:0]
 	}
 
 	batch := w.pending
@@ -287,4 +338,3 @@ func statusText(code int) string {
 		return "Unknown"
 	}
 }
-

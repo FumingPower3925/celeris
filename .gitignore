@@ -1,3 +1,10 @@
+# Ignore generated benchmark result artifacts
+test/benchmark/http1/*.csv
+test/benchmark/http1/*.json
+test/benchmark/http1/*.md
+test/benchmark/http2/*.csv
+test/benchmark/http2/*.json
+test/benchmark/http2/*.md
 # Binaries
 bin/
 *.exe

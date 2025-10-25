@@ -27,6 +27,22 @@ import (
 	"github.com/labstack/echo/v4"
 )
 
+// rrTransport implements http.RoundTripper and dispatches requests across
+// multiple underlying http.RoundTrippers (each maintaining its own conn pool).
+type rrTransport struct {
+	transports []http.RoundTripper
+	idx        uint64
+}
+
+func (r *rrTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if len(r.transports) == 0 {
+		return http.DefaultTransport.RoundTrip(req)
+	}
+	i := atomic.AddUint64(&r.idx, 1)
+	t := r.transports[int(i)%len(r.transports)]
+	return t.RoundTrip(req)
+}
+
 type RampUpResult struct {
 	Framework     string  `json:"framework"`
 	Scenario      string  `json:"scenario"`
@@ -150,15 +166,35 @@ func scenarioPathStr(sc string) string {
 func startServerHTTP1(framework, scenario string) (*ServerHandle, *http.Client) {
 	addr := "127.0.0.1" + freePort()
 
+	// Build configurable client(s)
+	base := &http.Transport{
+		MaxIdleConns:        10000,
+		MaxIdleConnsPerHost: 10000,
+		MaxConnsPerHost:     10000,
+		DisableCompression:  true,
+		IdleConnTimeout:     90 * time.Second,
+	}
+	numClients := 4
+	if v := os.Getenv("H1_CLIENTS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			numClients = n
+		}
+	}
+	trs := make([]http.RoundTripper, 0, numClients)
+	for i := 0; i < numClients; i++ {
+		// Clone base transport per client to avoid global conn pool contention
+		t := &http.Transport{
+			MaxIdleConns:        base.MaxIdleConns,
+			MaxIdleConnsPerHost: base.MaxIdleConnsPerHost,
+			MaxConnsPerHost:     base.MaxConnsPerHost,
+			DisableCompression:  base.DisableCompression,
+			IdleConnTimeout:     base.IdleConnTimeout,
+		}
+		trs = append(trs, t)
+	}
 	client := &http.Client{
-		Timeout: timeoutThresh,
-		Transport: &http.Transport{
-			MaxIdleConns:        10000,
-			MaxIdleConnsPerHost: 10000,
-			MaxConnsPerHost:     10000,
-			DisableCompression:  true,
-			IdleConnTimeout:     90 * time.Second,
-		},
+		Timeout:   timeoutThresh,
+		Transport: &rrTransport{transports: trs},
 	}
 
 	switch framework {
