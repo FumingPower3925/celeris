@@ -53,6 +53,7 @@ type Stream struct {
 	WindowSize             int32
 	ReceivedWindowUpd      chan int32
 	mu                     sync.RWMutex
+    writeMu                sync.Mutex
 	ResponseWriter         ResponseWriter // Connection for writing responses
 	ReceivedDataLen        int            // Track total data received for content-length validation
 	ReceivedInitialHeaders bool
@@ -61,6 +62,12 @@ type Stream struct {
 	cancel                 context.CancelFunc
 	phase                  Phase
 }
+
+// WriteLock acquires the per-stream write lock.
+func (s *Stream) WriteLock() { s.writeMu.Lock() }
+
+// WriteUnlock releases the per-stream write lock.
+func (s *Stream) WriteUnlock() { s.writeMu.Unlock() }
 
 var bufferPool = sync.Pool{New: func() any { return new(bytes.Buffer) }}
 

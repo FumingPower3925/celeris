@@ -1127,9 +1127,18 @@ func (c *Connection) WriteResponse(streamID uint32, status int, headers [][2]str
 		return fmt.Errorf("failed to encode headers: %w", err)
 	}
 
-	// Acquire lock only for writing HEADERS/DATA and updating stream state
-	c.writeMu.Lock()
-	defer c.writeMu.Unlock()
+    // Acquire per-stream lock to reduce cross-stream contention; fall back to conn lock if missing
+    var perStream *stream.Stream
+    if st, ok := c.processor.GetManager().GetStream(streamID); ok {
+        perStream = st
+    }
+    if perStream != nil {
+        perStream.WriteLock()
+        defer perStream.WriteUnlock()
+    } else {
+        c.writeMu.Lock()
+        defer c.writeMu.Unlock()
+    }
 
 	// Write HEADERS (and CONTINUATION) respecting peer MAX_FRAME_SIZE
 	// If no body is present, we can end the stream with HEADERS (END_STREAM) to avoid zero-length DATA later
@@ -1157,67 +1166,67 @@ func (c *Connection) WriteResponse(streamID uint32, status int, headers [][2]str
 		// Don't set IsStreaming for normal responses - reserve it for actual streaming
 	}
 
-    // If there is a body, choose adaptive path: small direct streaming, large buffered micro-batching
-    if len(body) > 0 {
-        const directThreshold = 32 * 1024 // 32 KiB
-        if len(body) <= directThreshold {
-            // Direct streaming under lock for tiny bodies
-            connWin, streamWin, maxFrame := c.processor.GetManager().GetSendWindowsAndMaxFrame(streamID)
-            if maxFrame == 0 {
-                maxFrame = 16384
-            }
-            remaining := body
-            for len(remaining) > 0 && connWin > 0 && streamWin > 0 && maxFrame > 0 {
-                allow := int(connWin)
-                if int(streamWin) < allow {
-                    allow = int(streamWin)
-                }
-                if int(maxFrame) < allow {
-                    allow = int(maxFrame)
-                }
-                if allow <= 0 {
-                    break
-                }
-                if allow > len(remaining) {
-                    allow = len(remaining)
-                }
-                chunk := remaining[:allow]
-                remaining = remaining[allow:]
-                end := len(remaining) == 0 // endStream on final chunk
-                if err := c.writer.WriteData(streamID, end, chunk); err != nil {
-                    return err
-                }
-                //nolint:gosec // bounded by windows
-                c.processor.GetManager().ConsumeSendWindow(streamID, int32(len(chunk)))
-                connWin, streamWin, maxFrame = c.processor.GetManager().GetSendWindowsAndMaxFrame(streamID)
-                if maxFrame == 0 {
-                    maxFrame = 16384
-                }
-                if end {
-                    if st, ok := c.processor.GetManager().GetStream(streamID); ok {
-                        if st.EndStream {
-                            st.SetState(stream.StateClosed)
-                        } else {
-                            st.SetState(stream.StateHalfClosedLocal)
-                        }
-                    }
-                }
-            }
-        } else {
-            // Buffered micro-batching for larger bodies
-            if s, ok := c.processor.GetManager().GetStream(streamID); ok && s.OutboundBuffer != nil {
-                _, _ = s.OutboundBuffer.Write(body)
-                s.OutboundEndStream = true
-            }
-            c.processor.FlushBufferedDataLocked(streamID)
-        }
-        // Flush HEADERS + DATA together
-        if err := c.writer.Flush(); err != nil {
-            return err
-        }
-        _ = c.conn.Wake(nil)
-        return nil
-    }
+	// If there is a body, choose adaptive path: small direct streaming, large buffered micro-batching
+	if len(body) > 0 {
+		const directThreshold = 32 * 1024 // 32 KiB
+		if len(body) <= directThreshold {
+			// Direct streaming under lock for tiny bodies
+			connWin, streamWin, maxFrame := c.processor.GetManager().GetSendWindowsAndMaxFrame(streamID)
+			if maxFrame == 0 {
+				maxFrame = 16384
+			}
+			remaining := body
+			for len(remaining) > 0 && connWin > 0 && streamWin > 0 && maxFrame > 0 {
+				allow := int(connWin)
+				if int(streamWin) < allow {
+					allow = int(streamWin)
+				}
+				if int(maxFrame) < allow {
+					allow = int(maxFrame)
+				}
+				if allow <= 0 {
+					break
+				}
+				if allow > len(remaining) {
+					allow = len(remaining)
+				}
+				chunk := remaining[:allow]
+				remaining = remaining[allow:]
+				end := len(remaining) == 0 // endStream on final chunk
+				if err := c.writer.WriteData(streamID, end, chunk); err != nil {
+					return err
+				}
+				//nolint:gosec // bounded by windows
+				c.processor.GetManager().ConsumeSendWindow(streamID, int32(len(chunk)))
+				connWin, streamWin, maxFrame = c.processor.GetManager().GetSendWindowsAndMaxFrame(streamID)
+				if maxFrame == 0 {
+					maxFrame = 16384
+				}
+				if end {
+					if st, ok := c.processor.GetManager().GetStream(streamID); ok {
+						if st.EndStream {
+							st.SetState(stream.StateClosed)
+						} else {
+							st.SetState(stream.StateHalfClosedLocal)
+						}
+					}
+				}
+			}
+		} else {
+			// Buffered micro-batching for larger bodies
+			if s, ok := c.processor.GetManager().GetStream(streamID); ok && s.OutboundBuffer != nil {
+				_, _ = s.OutboundBuffer.Write(body)
+				s.OutboundEndStream = true
+			}
+			c.processor.FlushBufferedDataLocked(streamID)
+		}
+		// Flush HEADERS + DATA together
+		if err := c.writer.Flush(); err != nil {
+			return err
+		}
+		_ = c.conn.Wake(nil)
+		return nil
+	}
 
 	// No body: flush HEADERS only
 	if err := c.writer.Flush(); err != nil {
