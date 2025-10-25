@@ -1,7 +1,0 @@
-# HTTP/1.1 Ramp-Up Benchmark Results
-
-| Framework | Scenario | MaxClients | MaxRPS | P95(ms) | TimeToDegrade(s) |
-|-----------|----------|------------|--------|---------|------------------|
-| celeris | simple | 440 | 71696 | 6.80 | 30.0 |
-| celeris | json | 440 | 74520 | 6.00 | 30.0 |
-| celeris | params | 640 | 71960 | 10.96 | 30.0 |

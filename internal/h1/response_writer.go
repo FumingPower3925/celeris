@@ -12,15 +12,12 @@ import (
 // Pre-allocated common headers to avoid allocations
 var (
 	statusLine200       = []byte("HTTP/1.1 200 OK\r\n")
-	headerContentType   = []byte("content-type: ")
 	headerContentLength = []byte("content-length: ")
 	headerConnection    = []byte("connection: ")
 	headerKeepAlive     = []byte("keep-alive\r\n")
 	headerClose         = []byte("close\r\n")
-	headerTransferEnc   = []byte("transfer-encoding: chunked\r\n")
 	headerSep           = []byte(": ")
 	crlf                = []byte("\r\n")
-	crlfcrlf            = []byte("\r\n\r\n")
 	chunkEnd            = []byte("0\r\n\r\n")
 
 	// Buffer pool for response assembly
@@ -137,60 +134,6 @@ func (w *ResponseWriter) WriteResponse(status int, headers [][2]string, body []b
 	}
 
 	return w.flush()
-}
-
-// writeStatusAndHeaders writes the HTTP status line and headers.
-func (w *ResponseWriter) writeStatusAndHeaders(status int, headers [][2]string, body []byte) {
-	// Build status line (fast-path for 200 OK)
-	if status == 200 {
-		w.pending = append(w.pending, []byte("HTTP/1.1 200 OK\r\n"))
-	} else {
-		statusLine := fmt.Sprintf("HTTP/1.1 %d %s\r\n", status, statusText(status))
-		w.pending = append(w.pending, []byte(statusLine))
-	}
-
-	// Determine if we should use chunked encoding
-	hasContentLength := false
-	hasTransferEncoding := false
-
-	for _, h := range headers {
-		if h[0] == "content-length" {
-			hasContentLength = true
-			if cl, err := strconv.ParseInt(h[1], 10, 64); err == nil {
-				w.contentLength = cl
-			}
-		}
-		if h[0] == "transfer-encoding" && h[1] == "chunked" {
-			hasTransferEncoding = true
-			w.chunkedMode = true
-		}
-	}
-
-	// Prefer Content-Length when body is known to avoid chunked overhead
-	if !hasContentLength && !hasTransferEncoding && len(body) > 0 {
-		w.contentLength = int64(len(body))
-		headers = append(headers, [2]string{"content-length", strconv.FormatInt(w.contentLength, 10)})
-	} else if !hasContentLength && !hasTransferEncoding && w.keepAlive {
-		// Streaming or unknown length: use chunked if keeping connection alive
-		w.chunkedMode = true
-		headers = append(headers, [2]string{"transfer-encoding", "chunked"})
-	}
-
-	// Add Connection header
-	if w.keepAlive {
-		headers = append(headers, [2]string{"connection", "keep-alive"})
-	} else {
-		headers = append(headers, [2]string{"connection", "close"})
-	}
-
-	// Write headers
-	for _, h := range headers {
-		headerLine := fmt.Sprintf("%s: %s\r\n", h[0], h[1])
-		w.pending = append(w.pending, []byte(headerLine))
-	}
-
-	// End of headers
-	w.pending = append(w.pending, []byte("\r\n"))
 }
 
 // writeBody writes response body, using chunked encoding if enabled.
@@ -344,3 +287,4 @@ func statusText(code int) string {
 		return "Unknown"
 	}
 }
+

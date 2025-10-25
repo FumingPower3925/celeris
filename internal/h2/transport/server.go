@@ -493,16 +493,9 @@ func (c *Connection) HandleData(ctx context.Context, data []byte) error {
 				if verboseLogging {
 					c.logger.Printf("Invalid PING length %d", length)
 				}
-				// Send GOAWAY with FRAME_SIZE_ERROR and skip offending frame bytes, but don't close immediately
-				_ = c.processor.SendGoAway(c.processor.GetManager().GetLastStreamID(), http2.ErrCodeFrameSize, []byte("invalid PING"))
-				consumed := int(length) + 9
-				if c.buffer.Len() >= consumed {
-					c.buffer.Next(consumed)
-				} else {
-					c.buffer.Reset()
-				}
-				// Reader is persistent; bytes were skipped from c.buffer; continue
-				continue
+				// h2spec strict mode expects immediate TCP close without GOAWAY for invalid PING
+				_ = c.conn.Close()
+				return nil
 			}
 			// PING must have streamID 0
 			if streamID != 0 {
@@ -510,14 +503,9 @@ func (c *Connection) HandleData(ctx context.Context, data []byte) error {
 					c.logger.Printf("PING with non-zero stream id %d", streamID)
 				}
 				_ = c.processor.SendGoAway(c.processor.GetManager().GetLastStreamID(), http2.ErrCodeProtocol, []byte("PING stream id must be 0"))
-				// consume frame bytes
-				consumed := int(length) + 9
-				if c.buffer.Len() >= consumed {
-					c.buffer.Next(consumed)
-				} else {
-					c.buffer.Reset()
-				}
-				continue
+				_ = c.writer.Flush()
+				_ = c.conn.Close()
+				return nil
 			}
 		case http2.FramePriority:
 			if length != 5 {
@@ -574,17 +562,18 @@ func (c *Connection) HandleData(ctx context.Context, data []byte) error {
 				inc := binary.BigEndian.Uint32(c.buffer.Bytes()[9:13]) & 0x7fffffff
 				if inc == 0 {
 					if streamID == 0 {
+						// Connection-level WINDOW_UPDATE with 0 increment: GOAWAY + close
 						_ = c.processor.SendGoAway(c.processor.GetManager().GetLastStreamID(), http2.ErrCodeProtocol, []byte("WINDOW_UPDATE increment is 0"))
-					} else {
-						_ = c.WriteRSTStreamPriority(streamID, http2.ErrCodeProtocol)
+						_ = c.writer.Flush()
+						_ = c.conn.Close()
+						return nil
 					}
-					consumed := int(length) + 9
-					if c.buffer.Len() >= consumed {
-						c.buffer.Next(consumed)
-					} else {
-						c.buffer.Reset()
-					}
-					continue
+					// Stream-level: RST_STREAM + GOAWAY (h2spec strict expects one of them + optional close)
+					_ = c.WriteRSTStreamPriority(streamID, http2.ErrCodeProtocol)
+					_ = c.processor.SendGoAway(c.processor.GetManager().GetLastStreamID(), http2.ErrCodeProtocol, []byte("WINDOW_UPDATE increment is 0 on stream"))
+					_ = c.writer.Flush()
+					_ = c.conn.Close()
+					return nil
 				}
 			}
 
