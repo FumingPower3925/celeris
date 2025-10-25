@@ -387,12 +387,13 @@ func startCelerisHTTP2(sc string) (*ServerHandle, *http.Client) {
 	cfg.Addr = freePort()
 	cfg.EnableH1 = false // HTTP/2 only
 	cfg.EnableH2 = true
-	cfg.MaxConcurrentStreams = 1000 // Support high concurrency for benchmarking
+	// Increase concurrency significantly to saturate server under test
+	cfg.MaxConcurrentStreams = 2000
 	srv := celeris.New(cfg)
 	go func() { _ = srv.ListenAndServe(r) }()
 	time.Sleep(500 * time.Millisecond)
-	// Support multiple parallel H2 connections via env H2_CLIENTS (default 1)
-	numClients := 1
+	// Support multiple parallel H2 connections via env H2_CLIENTS (default 8)
+	numClients := 8
 	if v := os.Getenv("H2_CLIENTS"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			numClients = n

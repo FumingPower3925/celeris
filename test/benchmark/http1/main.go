@@ -153,8 +153,10 @@ func startServerHTTP1(framework, scenario string) (*ServerHandle, *http.Client) 
 	client := &http.Client{
 		Timeout: timeoutThresh,
 		Transport: &http.Transport{
-			MaxIdleConns:        1000,
-			MaxIdleConnsPerHost: 1000,
+			MaxIdleConns:        10000,
+			MaxIdleConnsPerHost: 10000,
+			MaxConnsPerHost:     10000,
+			DisableCompression:  true,
 			IdleConnTimeout:     90 * time.Second,
 		},
 	}

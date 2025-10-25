@@ -1116,10 +1116,10 @@ func (c *Connection) WriteResponse(streamID uint32, status int, headers [][2]str
 		return nil
 	}
 
-    // Encode headers outside connection write lock to reduce contention.
-    // Use Encode (copy) so the returned slice remains valid after lock acquisition.
-    headerBlock, err := c.headerEncoder.Encode(allHeaders)
-    // return the pooled slice
+	// Encode headers outside connection write lock to reduce contention.
+	// Use Encode (copy) so the returned slice remains valid after lock acquisition.
+	headerBlock, err := c.headerEncoder.Encode(allHeaders)
+	// return the pooled slice
 	*pooled = allHeaders[:0]
 	headersSlicePool.Put(pooled)
 	if err != nil {
@@ -1127,9 +1127,9 @@ func (c *Connection) WriteResponse(streamID uint32, status int, headers [][2]str
 		return fmt.Errorf("failed to encode headers: %w", err)
 	}
 
-    // Acquire lock only for writing HEADERS/DATA and updating stream state
-    c.writeMu.Lock()
-    defer c.writeMu.Unlock()
+	// Acquire lock only for writing HEADERS/DATA and updating stream state
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
 
 	// Write HEADERS (and CONTINUATION) respecting peer MAX_FRAME_SIZE
 	// If no body is present, we can end the stream with HEADERS (END_STREAM) to avoid zero-length DATA later
@@ -1195,22 +1195,23 @@ func (c *Connection) WriteResponse(streamID uint32, status int, headers [][2]str
 
 // connWriter implements io.Writer for gnet.Conn
 type connWriter struct {
-	conn     gnet.Conn
-	mu       *sync.Mutex
-	logger   *log.Logger
-    // pending holds individual frame slices ready to send via AsyncWritev.
-    // Each element must be a full HTTP/2 frame (header+payload) slice referencing
-    // a stable backing array.
-    pending  [][]byte
+	conn   gnet.Conn
+	mu     *sync.Mutex
+	logger *log.Logger
+	// pending holds individual frame slices ready to send via AsyncWritev.
+	// Each element must be a full HTTP/2 frame (header+payload) slice referencing
+	// a stable backing array.
+	pending  [][]byte
 	inflight bool
-    // queued holds additional frames to send after inflight batch completes.
-    queued   [][]byte
-	parent   *Connection
+	// queued holds additional frames to send after inflight batch completes.
+	queued [][]byte
+	parent *Connection
 }
 
 // filterFrames removes frames targeting streams that have been closed/reset.
 // filterFrames is retained for documentation/reference; use inline filtering in Flush.
 // Deprecated: kept to avoid re-adding in future refactors.
+//
 //lint:ignore U1000 retained for future reference
 func (w *connWriter) filterFrames(_ []byte) []byte { return nil }
 
@@ -1237,129 +1238,129 @@ func (w *connWriter) Write(p []byte) (n int, err error) {
 		w.logger.Printf("Writing %d bytes to connection", len(p))
 	}
 
-    // Copy the entire buffer once to ensure lifetime across async sends
-    if len(p) == 0 {
-        return 0, nil
-    }
-    data := make([]byte, len(p))
-    copy(data, p)
+	// Copy the entire buffer once to ensure lifetime across async sends
+	if len(p) == 0 {
+		return 0, nil
+	}
+	data := make([]byte, len(p))
+	copy(data, p)
 
-    // Parse frames and queue kept segments referencing the stable backing array
-    off := 0
-    var segments [][]byte
-    for len(data)-off >= 9 {
-        length := int(uint32(data[off])<<16 | uint32(data[off+1])<<8 | uint32(data[off+2]))
-        ftype := http2.FrameType(data[off+3])
-        // flags := http2.Flags(data[off+4]) // Only for debug
-        sid := binary.BigEndian.Uint32(data[off+5:off+9]) & 0x7fffffff
-        consume := 9 + length
-        if consume <= 0 || off+consume > len(data) {
-            break
-        }
-        keep := true
-        if sid != 0 && w.parent != nil && ftype != http2.FrameRSTStream {
-            if s, ok := w.parent.processor.GetManager().GetStream(sid); ok && s.ClosedByReset {
-                keep = false
-            }
-            if keep && w.parent.IsStreamClosed(sid) {
-                keep = false
-            }
-        }
-        if keep {
-            segments = append(segments, data[off:off+consume])
-        }
-        off += consume
-    }
+	// Parse frames and queue kept segments referencing the stable backing array
+	off := 0
+	var segments [][]byte
+	for len(data)-off >= 9 {
+		length := int(uint32(data[off])<<16 | uint32(data[off+1])<<8 | uint32(data[off+2]))
+		ftype := http2.FrameType(data[off+3])
+		// flags := http2.Flags(data[off+4]) // Only for debug
+		sid := binary.BigEndian.Uint32(data[off+5:off+9]) & 0x7fffffff
+		consume := 9 + length
+		if consume <= 0 || off+consume > len(data) {
+			break
+		}
+		keep := true
+		if sid != 0 && w.parent != nil && ftype != http2.FrameRSTStream {
+			if s, ok := w.parent.processor.GetManager().GetStream(sid); ok && s.ClosedByReset {
+				keep = false
+			}
+			if keep && w.parent.IsStreamClosed(sid) {
+				keep = false
+			}
+		}
+		if keep {
+			segments = append(segments, data[off:off+consume])
+		}
+		off += consume
+	}
 
-    // Serialize appending pending segments
-    w.mu.Lock()
-    if len(segments) > 0 {
-        w.pending = append(w.pending, segments...)
-    }
-    w.mu.Unlock()
-    return len(p), nil
+	// Serialize appending pending segments
+	w.mu.Lock()
+	if len(segments) > 0 {
+		w.pending = append(w.pending, segments...)
+	}
+	w.mu.Unlock()
+	return len(p), nil
 }
 
 // Flush ensures data is sent by calling gnet's Flush
 func (w *connWriter) Flush() error {
-    w.mu.Lock()
-    if w.inflight {
-        if len(w.pending) > 0 {
-            w.queued = append(w.queued, w.pending...)
-            w.pending = nil
-        }
-        w.mu.Unlock()
-        return nil
-    }
-    batch := w.pending
-    w.pending = nil
-    if len(batch) == 0 {
-        w.mu.Unlock()
-        _ = w.conn.Wake(nil)
-        return nil
-    }
-    // Inline filter without extra copies
-    filtered := w.filterPartsNoCopy(batch)
-    if len(filtered) == 0 {
-        w.mu.Unlock()
-        _ = w.conn.Wake(nil)
-        return nil
-    }
-    w.inflight = true
-    w.mu.Unlock()
-    return w.asyncSend(filtered)
+	w.mu.Lock()
+	if w.inflight {
+		if len(w.pending) > 0 {
+			w.queued = append(w.queued, w.pending...)
+			w.pending = nil
+		}
+		w.mu.Unlock()
+		return nil
+	}
+	batch := w.pending
+	w.pending = nil
+	if len(batch) == 0 {
+		w.mu.Unlock()
+		_ = w.conn.Wake(nil)
+		return nil
+	}
+	// Inline filter without extra copies
+	filtered := w.filterPartsNoCopy(batch)
+	if len(filtered) == 0 {
+		w.mu.Unlock()
+		_ = w.conn.Wake(nil)
+		return nil
+	}
+	w.inflight = true
+	w.mu.Unlock()
+	return w.asyncSend(filtered)
 }
 
 // filterPartsNoCopy filters parts against closed/reset streams without copying.
 func (w *connWriter) filterPartsNoCopy(parts [][]byte) [][]byte {
-    out := make([][]byte, 0, len(parts))
-    for _, part := range parts {
-        if len(part) < 9 {
-            continue
-        }
-        sid := binary.BigEndian.Uint32(part[5:9]) & 0x7fffffff
-        ftype := http2.FrameType(part[3])
-        keep := true
-        if sid != 0 && w.parent != nil && ftype != http2.FrameRSTStream {
-            if s, ok := w.parent.processor.GetManager().GetStream(sid); ok && s.ClosedByReset {
-                keep = false
-            }
-            if keep && w.parent.IsStreamClosed(sid) {
-                keep = false
-            }
-        }
-        if keep {
-            out = append(out, part)
-        }
-    }
-    return out
+	out := make([][]byte, 0, len(parts))
+	for _, part := range parts {
+		if len(part) < 9 {
+			continue
+		}
+		sid := binary.BigEndian.Uint32(part[5:9]) & 0x7fffffff
+		ftype := http2.FrameType(part[3])
+		keep := true
+		if sid != 0 && w.parent != nil && ftype != http2.FrameRSTStream {
+			if s, ok := w.parent.processor.GetManager().GetStream(sid); ok && s.ClosedByReset {
+				keep = false
+			}
+			if keep && w.parent.IsStreamClosed(sid) {
+				keep = false
+			}
+		}
+		if keep {
+			out = append(out, part)
+		}
+	}
+	return out
 }
 
 // asyncSend sends parts via AsyncWritev and drains queued parts recursively.
 func (w *connWriter) asyncSend(parts [][]byte) error {
-    return w.conn.AsyncWritev(parts, func(_ gnet.Conn, err error) error {
-        if verboseLogging && err != nil {
-            w.logger.Printf("AsyncWritev callback error: %v", err)
-        }
-        w.mu.Lock()
-        next := w.queued
-        if len(next) > 0 {
-            w.queued = nil
-            // Filter queued parts just-in-time
-            filtered := w.filterPartsNoCopy(next)
-            if len(filtered) == 0 {
-                w.inflight = false
-                w.mu.Unlock()
-                return nil
-            }
-            w.inflight = true
-            w.mu.Unlock()
-            return w.asyncSend(filtered)
-        }
-        w.inflight = false
-        w.mu.Unlock()
-        return nil
-    })
+	return w.conn.AsyncWritev(parts, func(_ gnet.Conn, err error) error {
+		if verboseLogging && err != nil {
+			w.logger.Printf("AsyncWritev callback error: %v", err)
+		}
+		w.mu.Lock()
+		next := w.queued
+		if len(next) > 0 {
+			w.queued = nil
+			// Filter queued parts just-in-time
+			filtered := w.filterPartsNoCopy(next)
+			if len(filtered) == 0 {
+				w.inflight = false
+				w.mu.Unlock()
+				return nil
+			}
+			w.inflight = true
+			w.mu.Unlock()
+			return w.asyncSend(filtered)
+		}
+		w.inflight = false
+		w.mu.Unlock()
+		return nil
+	})
 }
 
 // SendGoAway sends a GOAWAY frame and marks that we've sent it
