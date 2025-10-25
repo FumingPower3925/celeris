@@ -76,7 +76,10 @@ func runRampUpBenchmark() {
 	// Check for FRAMEWORK environment variable to filter frameworks
 	selectedFramework := os.Getenv("FRAMEWORK")
 
-	scenarios := []string{"simple", "json", "params"}
+    scenarios := []string{"simple", "json", "params"}
+    if os.Getenv("H2_ENABLE_PUSH") == "1" {
+        scenarios = append(scenarios, "push")
+    }
 	allFrameworks := []string{"nethttp", "gin", "echo", "chi", "iris", "celeris"}
 
 	var frameworks []string
@@ -356,9 +359,15 @@ func startServerHTTP2(fw, sc string) (*ServerHandle, *http.Client) {
 
 func startCelerisHTTP2(sc string) (*ServerHandle, *http.Client) {
 	r := celeris.NewRouter()
-	switch sc {
+    switch sc {
 	case "simple":
-		r.GET("/bench", func(ctx *celeris.Context) error { return ctx.String(200, "ok") })
+		r.GET("/bench", func(ctx *celeris.Context) error {
+			// Demonstrate server push of a tiny resource (header-only push)
+			// Pushed resource will be served by another handler below
+			_ = ctx.PushPromise("/pushed.txt", map[string]string{"accept": "text/plain"})
+			return ctx.String(200, "ok")
+		})
+		r.GET("/pushed.txt", func(ctx *celeris.Context) error { return ctx.String(200, "pushed") })
 	case "json":
 		r.GET("/json", func(ctx *celeris.Context) error {
 			return ctx.JSON(200, map[string]any{"status": "ok", "code": 200})
@@ -370,7 +379,18 @@ func startCelerisHTTP2(sc string) (*ServerHandle, *http.Client) {
 				"post_id": celeris.Param(ctx, "postId"),
 			})
 		})
-	}
+    case "push":
+        // Push multiple small resources and serve them
+        r.GET("/bench", func(ctx *celeris.Context) error {
+            _ = ctx.PushPromise("/pushed-a.txt", nil)
+            _ = ctx.PushPromise("/pushed-b.txt", nil)
+            _ = ctx.PushPromise("/pushed-c.txt", nil)
+            return ctx.String(200, "ok")
+        })
+        r.GET("/pushed-a.txt", func(ctx *celeris.Context) error { return ctx.String(200, "A") })
+        r.GET("/pushed-b.txt", func(ctx *celeris.Context) error { return ctx.String(200, "B") })
+        r.GET("/pushed-c.txt", func(ctx *celeris.Context) error { return ctx.String(200, "C") })
+    }
 	cfg := celeris.DefaultConfig()
 	// Auto-tune event loops to CPUs (leave headroom for client+OS)
 	cpus := runtime.GOMAXPROCS(0)
