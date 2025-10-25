@@ -903,11 +903,13 @@ func (c *Connection) sendServerPreface() error {
 	}
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
+	// Prefer larger frames inbound and larger inbound window to reduce syscall pressure.
+	// Increase HPACK table size to improve header compression for repeated fields
 	settings := []http2.Setting{
-		{ID: http2.SettingHeaderTableSize, Val: 4096}, // Explicit HPACK dynamic table size
+		{ID: http2.SettingHeaderTableSize, Val: 16384},
 		{ID: http2.SettingMaxConcurrentStreams, Val: c.processor.GetManager().GetMaxConcurrentStreams()},
-		{ID: http2.SettingMaxFrameSize, Val: 16384},
-		{ID: http2.SettingInitialWindowSize, Val: 65535},
+		{ID: http2.SettingMaxFrameSize, Val: 65535},        // allow peer to send larger frames to us
+		{ID: http2.SettingInitialWindowSize, Val: 1 << 20}, // 1MB inbound window per stream
 	}
 	if err := c.writer.WriteSettings(settings...); err != nil {
 		if verboseLogging {
@@ -983,9 +985,6 @@ func (c *Connection) IsShuttingDown() bool {
 //
 //nolint:gocyclo // Flow control and frame ordering requires complex window management per RFC 7540
 func (c *Connection) WriteResponse(streamID uint32, status int, headers [][2]string, body []byte) error {
-	// Serialize the entire response to preserve frame ordering
-	c.writeMu.Lock()
-	defer c.writeMu.Unlock()
 	// hot path: avoid logging to reduce allocations
 
 	// Check if we've sent GOAWAY - don't send any more responses
@@ -1035,6 +1034,10 @@ func (c *Connection) WriteResponse(streamID uint32, status int, headers [][2]str
 		}
 		// Only write DATA frames with endStream=false when there is body
 		if len(body) > 0 {
+			// LOCK ONLY for writing
+			c.writeMu.Lock()
+			defer c.writeMu.Unlock()
+
 			// Respect windows
 			connWin, streamWin, maxFrame := c.processor.GetManager().GetSendWindowsAndMaxFrame(streamID)
 			if maxFrame == 0 {
@@ -1094,12 +1097,16 @@ func (c *Connection) WriteResponse(streamID uint32, status int, headers [][2]str
 	// Final guard before encoding/writing HEADERS
 	if c.sentGoAway.Load() || c.IsStreamClosed(streamID) {
 		// avoid logging in hot path
-		_ = c.writer.Flush()
+		*pooled = hdrs[:0]
+		headersSlicePool.Put(pooled)
 		return nil
 	}
 
-	// Use the per-connection encoder under write lock (already held via writeMu)
-	// to gain dynamic-table compression without cross-stream races.
+	// LOCK for encoding + writing (encoder is NOT thread-safe)
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+
+	// Encode headers under lock
 	headerBlock, err := c.headerEncoder.EncodeBorrow(allHeaders)
 	// return the pooled slice
 	*pooled = allHeaders[:0]
@@ -1108,10 +1115,8 @@ func (c *Connection) WriteResponse(streamID uint32, status int, headers [][2]str
 		c.logger.Printf("ERROR encoding headers: %v", err)
 		return fmt.Errorf("failed to encode headers: %w", err)
 	}
-	// avoid logging in hot path
 
 	// Write HEADERS (and CONTINUATION) respecting peer MAX_FRAME_SIZE
-	// Note: writeMu is already held for the entire WriteResponse function
 	// If no body is present, we can end the stream with HEADERS (END_STREAM) to avoid zero-length DATA later
 	endStream := len(body) == 0
 	if verboseLogging {
@@ -1130,7 +1135,6 @@ func (c *Connection) WriteResponse(streamID uint32, status int, headers [][2]str
 	// Mark headers as sent BEFORE flushing
 	if st, ok := c.processor.GetManager().GetStream(streamID); ok {
 		if st.ClosedByReset {
-			c.writeMu.Unlock()
 			return fmt.Errorf("stream %d was reset by peer", streamID)
 		}
 		st.HeadersSent = true

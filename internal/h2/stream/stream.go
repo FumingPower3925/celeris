@@ -1199,48 +1199,58 @@ func (p *Processor) flushBufferedData(streamID uint32) {
 		maxFrame = 16384
 	}
 
-	// Compute chunk size - be aggressive for h2spec compliance
-	allow := int(connWin)
-	if int(strWin) < allow {
-		allow = int(strWin)
-	}
-	if int(maxFrame) < allow {
-		allow = int(maxFrame)
-	}
-
-	if allow <= 0 {
-		// If any positive window exists, send at least 1 byte to make progress
-		if connWin > 0 && strWin > 0 && maxFrame > 0 {
-			allow = 1
-		} else {
-			return
+	// Micro-batching loop: send multiple chunks until windows or buffer are exhausted
+	totalSent := 0
+	for {
+		// Compute chunk size
+		allow := int(connWin)
+		if int(strWin) < allow {
+			allow = int(strWin)
+		}
+		if int(maxFrame) < allow {
+			allow = int(maxFrame)
+		}
+		if allow <= 0 {
+			// If any positive window exists, send at least 1 byte to make progress
+			if connWin > 0 && strWin > 0 && maxFrame > 0 {
+				allow = 1
+			} else {
+				break
+			}
+		}
+		if allow > s.OutboundBuffer.Len() {
+			allow = s.OutboundBuffer.Len()
+		}
+		if allow <= 0 {
+			break
+		}
+		chunk := make([]byte, allow)
+		if _, err := s.OutboundBuffer.Read(chunk); err != nil {
+			break
+		}
+		endStream := s.OutboundBuffer.Len() == 0 && s.OutboundEndStream && !isStreaming
+		_ = p.writer.WriteData(streamID, endStream, chunk)
+		//nolint:gosec
+		sent := int32(len(chunk))
+		p.manager.ConsumeSendWindow(streamID, sent)
+		connWin, strWin, maxFrame = p.manager.GetSendWindowsAndMaxFrame(streamID)
+		totalSent += int(sent)
+		if endStream {
+			if s.EndStream {
+				s.SetState(StateClosed)
+			} else {
+				s.SetState(StateHalfClosedLocal)
+			}
+			break
+		}
+		// If we sent less than a full frame and buffer is empty, stop to flush
+		if s.OutboundBuffer.Len() == 0 {
+			break
 		}
 	}
-
-	if allow > s.OutboundBuffer.Len() {
-		allow = s.OutboundBuffer.Len()
-	}
-
-	chunk := make([]byte, allow)
-	if _, err := s.OutboundBuffer.Read(chunk); err != nil {
-		return
-	}
-	endStream := s.OutboundBuffer.Len() == 0 && s.OutboundEndStream && !isStreaming
-	_ = p.writer.WriteData(streamID, endStream, chunk)
-	if flusher, ok := p.writer.(interface{ Flush() error }); ok {
-		_ = flusher.Flush()
-	}
-	//nolint:gosec // G115: safe conversion, chunk size bounded by flow control windows and MAX_FRAME_SIZE
-	p.manager.ConsumeSendWindow(streamID, int32(len(chunk)))
-
-	// If we ended the stream locally with this DATA write, update state
-	if endStream {
-		if s.EndStream {
-			// remote already ended -> now fully closed
-			s.SetState(StateClosed)
-		} else {
-			// remote still open -> half-closed local
-			s.SetState(StateHalfClosedLocal)
+	if totalSent > 0 {
+		if flusher, ok := p.writer.(interface{ Flush() error }); ok {
+			_ = flusher.Flush()
 		}
 	}
 }

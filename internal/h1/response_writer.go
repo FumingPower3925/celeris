@@ -1,12 +1,35 @@
 package h1
 
 import (
-    "fmt"
-    "log"
-    "strconv"
-    "sync"
+	"fmt"
+	"log"
+	"strconv"
+	"sync"
 
-    "github.com/panjf2000/gnet/v2"
+	"github.com/panjf2000/gnet/v2"
+)
+
+// Pre-allocated common headers to avoid allocations
+var (
+	statusLine200       = []byte("HTTP/1.1 200 OK\r\n")
+	headerContentType   = []byte("content-type: ")
+	headerContentLength = []byte("content-length: ")
+	headerConnection    = []byte("connection: ")
+	headerKeepAlive     = []byte("keep-alive\r\n")
+	headerClose         = []byte("close\r\n")
+	headerTransferEnc   = []byte("transfer-encoding: chunked\r\n")
+	headerSep           = []byte(": ")
+	crlf                = []byte("\r\n")
+	crlfcrlf            = []byte("\r\n\r\n")
+	chunkEnd            = []byte("0\r\n\r\n")
+
+	// Buffer pool for response assembly
+	responseBufferPool = sync.Pool{
+		New: func() any {
+			b := make([]byte, 0, 4096)
+			return &b
+		},
+	}
 )
 
 // ResponseWriter handles HTTP/1.1 response writing with efficient batching.
@@ -34,26 +57,83 @@ func NewResponseWriter(conn gnet.Conn, logger *log.Logger, keepAlive bool) *Resp
 }
 
 // WriteResponse writes HTTP/1.1 response with status, headers and body.
-// If this is the first call, it writes status line and headers.
-// Subsequent calls write body chunks.
+// Optimized path: assembles entire response in a single buffer and sends with one AsyncWritev.
 func (w *ResponseWriter) WriteResponse(status int, headers [][2]string, body []byte, endResponse bool) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
 	if !w.headersSent {
-		// First write: send status line and headers
-		w.writeStatusAndHeaders(status, headers, body)
+		// FAST PATH: Assemble entire response (status + headers + body) into a single buffer
+		bufPtr := responseBufferPool.Get().(*[]byte)
+		buf := (*bufPtr)[:0]
+
+		// Status line (fast-path for 200)
+		if status == 200 {
+			buf = append(buf, statusLine200...)
+		} else {
+			buf = append(buf, "HTTP/1.1 "...)
+			buf = strconv.AppendInt(buf, int64(status), 10)
+			buf = append(buf, ' ')
+			buf = append(buf, statusText(status)...)
+			buf = append(buf, crlf...)
+		}
+
+		// Determine content-length upfront
+		hasContentLength := false
+		for _, h := range headers {
+			if h[0] == "content-length" {
+				hasContentLength = true
+				break
+			}
+		}
+
+		// If no content-length and we have a body, add it
+		if !hasContentLength && len(body) > 0 {
+			buf = append(buf, headerContentLength...)
+			buf = strconv.AppendInt(buf, int64(len(body)), 10)
+			buf = append(buf, crlf...)
+		}
+
+		// Write all headers (zero-alloc for common cases)
+		for _, h := range headers {
+			buf = append(buf, h[0]...)
+			buf = append(buf, headerSep...)
+			buf = append(buf, h[1]...)
+			buf = append(buf, crlf...)
+		}
+
+		// Connection header
+		buf = append(buf, headerConnection...)
+		if w.keepAlive {
+			buf = append(buf, headerKeepAlive...)
+		} else {
+			buf = append(buf, headerClose...)
+		}
+
+		// End of headers
+		buf = append(buf, crlf...)
+
+		// Body
+		if len(body) > 0 {
+			buf = append(buf, body...)
+		}
+
+		// Send entire response in one go
+		w.pending = append(w.pending, buf)
+		*bufPtr = buf[:0]
+		responseBufferPool.Put(bufPtr)
+
 		w.headersSent = true
+		return w.flush()
 	}
 
-	// Write body
+	// Streaming path (headers already sent)
 	if len(body) > 0 {
 		w.writeBody(body)
 	}
 
-	// If this is the end and we're in chunked mode, write final chunk
 	if endResponse && w.chunkedMode {
-		w.pending = append(w.pending, []byte("0\r\n\r\n"))
+		w.pending = append(w.pending, chunkEnd)
 	}
 
 	return w.flush()
@@ -61,13 +141,13 @@ func (w *ResponseWriter) WriteResponse(status int, headers [][2]string, body []b
 
 // writeStatusAndHeaders writes the HTTP status line and headers.
 func (w *ResponseWriter) writeStatusAndHeaders(status int, headers [][2]string, body []byte) {
-    // Build status line (fast-path for 200 OK)
-    if status == 200 {
-        w.pending = append(w.pending, []byte("HTTP/1.1 200 OK\r\n"))
-    } else {
-        statusLine := fmt.Sprintf("HTTP/1.1 %d %s\r\n", status, statusText(status))
-        w.pending = append(w.pending, []byte(statusLine))
-    }
+	// Build status line (fast-path for 200 OK)
+	if status == 200 {
+		w.pending = append(w.pending, []byte("HTTP/1.1 200 OK\r\n"))
+	} else {
+		statusLine := fmt.Sprintf("HTTP/1.1 %d %s\r\n", status, statusText(status))
+		w.pending = append(w.pending, []byte(statusLine))
+	}
 
 	// Determine if we should use chunked encoding
 	hasContentLength := false
@@ -86,15 +166,15 @@ func (w *ResponseWriter) writeStatusAndHeaders(status int, headers [][2]string, 
 		}
 	}
 
-    // Prefer Content-Length when body is known to avoid chunked overhead
-    if !hasContentLength && !hasTransferEncoding && len(body) > 0 {
-        w.contentLength = int64(len(body))
-        headers = append(headers, [2]string{"content-length", strconv.FormatInt(w.contentLength, 10)})
-    } else if !hasContentLength && !hasTransferEncoding && w.keepAlive {
-        // Streaming or unknown length: use chunked if keeping connection alive
-        w.chunkedMode = true
-        headers = append(headers, [2]string{"transfer-encoding", "chunked"})
-    }
+	// Prefer Content-Length when body is known to avoid chunked overhead
+	if !hasContentLength && !hasTransferEncoding && len(body) > 0 {
+		w.contentLength = int64(len(body))
+		headers = append(headers, [2]string{"content-length", strconv.FormatInt(w.contentLength, 10)})
+	} else if !hasContentLength && !hasTransferEncoding && w.keepAlive {
+		// Streaming or unknown length: use chunked if keeping connection alive
+		w.chunkedMode = true
+		headers = append(headers, [2]string{"transfer-encoding", "chunked"})
+	}
 
 	// Add Connection header
 	if w.keepAlive {
