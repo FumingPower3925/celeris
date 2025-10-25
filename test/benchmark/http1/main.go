@@ -50,8 +50,22 @@ const (
 )
 
 func main() {
+	// Check for FRAMEWORK environment variable to filter frameworks
+	selectedFramework := os.Getenv("FRAMEWORK")
+	
 	scenarios := []string{"simple", "json", "params"}
-	frameworks := []string{"celeris", "nethttp", "gin", "echo", "chi", "fiber"}
+	allFrameworks := []string{"celeris", "nethttp", "gin", "echo", "chi", "fiber"}
+	
+	var frameworks []string
+	if selectedFramework != "" {
+		// Run only the selected framework
+		frameworks = []string{selectedFramework}
+		fmt.Printf("Running benchmarks for: %s\n", selectedFramework)
+	} else {
+		// Run all frameworks
+		frameworks = allFrameworks
+		fmt.Println("Running benchmarks for all frameworks")
+	}
 
 	var results []RampUpResult
 	for _, fw := range frameworks {

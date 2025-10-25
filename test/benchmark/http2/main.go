@@ -57,15 +57,29 @@ const (
 )
 
 func runRampUpBenchmark() {
+	// Check for FRAMEWORK environment variable to filter frameworks
+	selectedFramework := os.Getenv("FRAMEWORK")
+	
 	scenarios := []string{"simple", "json", "params"}
-	frameworks := []string{"nethttp", "gin", "echo", "chi", "iris", "celeris"}
+	allFrameworks := []string{"nethttp", "gin", "echo", "chi", "iris", "celeris"}
+	
+	var frameworks []string
+	if selectedFramework != "" {
+		// Run only the selected framework
+		frameworks = []string{selectedFramework}
+		fmt.Printf("Running benchmarks for: %s\n", selectedFramework)
+	} else {
+		// Run all frameworks
+		frameworks = allFrameworks
+		fmt.Println("Running benchmarks for all frameworks")
+	}
 
 	var results []RampUpResult
 	for _, fw := range frameworks {
 		fmt.Printf("\n╔════════════════════════════════════════════════════════════════════════════════╗\n")
 		fmt.Printf("║ Testing Framework: %-60s ║\n", fw)
 		fmt.Printf("╚════════════════════════════════════════════════════════════════════════════════╝\n")
-		
+
 		var fwResults []RampUpResult
 		for _, sc := range scenarios {
 			fmt.Printf("\n→ Scenario: %s\n", sc)
@@ -97,14 +111,14 @@ func runRampUpBenchmark() {
 			cancel()
 			results = append(results, r)
 			fwResults = append(fwResults, r)
-			
+
 			// Print immediate result for this scenario
 			fmt.Printf("✓ Complete: MaxClients=%d | MaxRPS=%.0f | P95=%.2fms | Time=%.1fs\n",
 				r.MaxClients, r.MaxRPS, r.P95AtMax, r.TimeToDegrade)
-			
+
 			time.Sleep(1 * time.Second) // Cool down between tests
 		}
-		
+
 		// Print framework summary
 		fmt.Printf("\n┌─ %s Summary ─────────────────────────────────────────────────────────────┐\n", fw)
 		fmt.Printf("│ %-10s │ %12s │ %12s │ %12s │ %12s │\n",
@@ -347,13 +361,13 @@ func startCelerisHTTP2(sc string) (*ServerHandle, *http.Client) {
 	} else {
 		cfg.NumEventLoop = cpus - 2
 	}
-	cfg.Multicore = true                // Enable multicore for maximum performance
-	cfg.ReusePort = true                // Let gnet accept on all loops when supported
+	cfg.Multicore = true // Enable multicore for maximum performance
+	cfg.ReusePort = true // Let gnet accept on all loops when supported
 	cfg.Logger = log.New(io.Discard, "", 0)
 	cfg.Addr = freePort()
-	cfg.EnableH1 = false                // HTTP/2 only
+	cfg.EnableH1 = false // HTTP/2 only
 	cfg.EnableH2 = true
-	cfg.MaxConcurrentStreams = 250      // Support more concurrent streams for benchmarking
+	cfg.MaxConcurrentStreams = 1000 // Support high concurrency for benchmarking
 	srv := celeris.New(cfg)
 	go func() { _ = srv.ListenAndServe(r) }()
 	time.Sleep(500 * time.Millisecond)

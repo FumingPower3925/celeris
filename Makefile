@@ -1,4 +1,4 @@
-.PHONY: all build test test-unit test-integration test-benchmark test-fuzz test-coverage test-race bench lint coverage docs docs-serve sonar snyk load-test h2spec clean help test-rampup test-rampup-h1 test-rampup-h2
+.PHONY: all build test test-unit test-integration test-benchmark test-fuzz test-coverage test-race bench lint coverage docs docs-serve sonar snyk load-test h2spec clean help test-rampup test-rampup-h1 test-rampup-h2 test-rampup-h1-celeris test-rampup-h2-celeris
 
 # Default target
 all: lint test build
@@ -31,15 +31,25 @@ test-benchmark:
 # Run incremental ramp-up benchmarks (both HTTP/1.1 and HTTP/2)
 test-rampup: test-rampup-h1 test-rampup-h2
 
-# Run HTTP/1.1 ramp-up benchmarks
+# Run HTTP/1.1 ramp-up benchmarks (all frameworks)
 test-rampup-h1:
-	@echo "Running HTTP/1.1 ramp-up benchmarks..."
+	@echo "Running HTTP/1.1 ramp-up benchmarks (all frameworks)..."
 	@cd test/benchmark/http1 && go build -tags "poll_opt gc_opt" -o bench-rampup-h1 . && ./bench-rampup-h1
 
-# Run HTTP/2 ramp-up benchmarks (Celeris vs others)
+# Run HTTP/1.1 ramp-up benchmarks (Celeris only)
+test-rampup-h1-celeris:
+	@echo "Running HTTP/1.1 ramp-up benchmarks (Celeris only)..."
+	@cd test/benchmark/http1 && go build -tags "poll_opt gc_opt" -o bench-rampup-h1 . && FRAMEWORK=celeris ./bench-rampup-h1
+
+# Run HTTP/2 ramp-up benchmarks (all frameworks)
 test-rampup-h2:
-	@echo "Running HTTP/2 ramp-up benchmarks (Celeris vs Iris, Gin, Echo, Chi, net/http)..."
+	@echo "Running HTTP/2 ramp-up benchmarks (all frameworks)..."
 	@cd test/benchmark/http2 && go build -tags "poll_opt gc_opt" -o bench-rampup-h2 . && ./bench-rampup-h2
+
+# Run HTTP/2 ramp-up benchmarks (Celeris only)
+test-rampup-h2-celeris:
+	@echo "Running HTTP/2 ramp-up benchmarks (Celeris only)..."
+	@cd test/benchmark/http2 && go build -tags "poll_opt gc_opt" -o bench-rampup-h2 . && FRAMEWORK=celeris ./bench-rampup-h2
 
 # Run fuzz tests (30s each)
 test-fuzz:
@@ -143,9 +153,11 @@ help:
 	@echo "  make test-unit         - Run unit tests only"
 	@echo "  make test-integration  - Run integration tests"
 	@echo "  make test-benchmark    - Run comparative benchmarks"
-	@echo "  make test-rampup       - Run ramp-up benchmarks (both H1 and H2)"
-	@echo "  make test-rampup-h1    - Run HTTP/1.1 ramp-up benchmarks"
-	@echo "  make test-rampup-h2    - Run HTTP/2 ramp-up benchmarks (Celeris vs others)"
+	@echo "  make test-rampup            - Run ramp-up benchmarks (both H1 and H2, all frameworks)"
+	@echo "  make test-rampup-h1         - Run HTTP/1.1 ramp-up benchmarks (all frameworks)"
+	@echo "  make test-rampup-h1-celeris - Run HTTP/1.1 ramp-up benchmarks (Celeris only, fast)"
+	@echo "  make test-rampup-h2         - Run HTTP/2 ramp-up benchmarks (all frameworks)"
+	@echo "  make test-rampup-h2-celeris - Run HTTP/2 ramp-up benchmarks (Celeris only, fast)"
 	@echo "  make test-fuzz         - Run fuzz tests"
 	@echo "  make test-coverage     - Generate test coverage report"
 	@echo "  make test-race         - Run tests with race detector"
