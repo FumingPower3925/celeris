@@ -62,11 +62,16 @@ func runRampUpBenchmark() {
 
 	var results []RampUpResult
 	for _, fw := range frameworks {
+		fmt.Printf("\n╔════════════════════════════════════════════════════════════════════════════════╗\n")
+		fmt.Printf("║ Testing Framework: %-60s ║\n", fw)
+		fmt.Printf("╚════════════════════════════════════════════════════════════════════════════════╝\n")
+		
+		var fwResults []RampUpResult
 		for _, sc := range scenarios {
-			fmt.Printf("\n=== Testing %s / %s ===\n", fw, sc)
+			fmt.Printf("\n→ Scenario: %s\n", sc)
 			srv, client := startServerHTTP2(fw, sc)
 			if srv == nil {
-				fmt.Printf("FAILED to start %s\n", fw)
+				fmt.Printf("✗ FAILED to start server\n")
 				continue
 			}
 			url := "http://localhost" + srv.Addr + scenarioPathStr(sc)
@@ -91,10 +96,25 @@ func runRampUpBenchmark() {
 			_ = srv.Stop(ctx)
 			cancel()
 			results = append(results, r)
-			fmt.Printf("Result: maxClients=%d maxRPS=%.0f p95=%.2fms time=%.1fs\n",
+			fwResults = append(fwResults, r)
+			
+			// Print immediate result for this scenario
+			fmt.Printf("✓ Complete: MaxClients=%d | MaxRPS=%.0f | P95=%.2fms | Time=%.1fs\n",
 				r.MaxClients, r.MaxRPS, r.P95AtMax, r.TimeToDegrade)
+			
 			time.Sleep(1 * time.Second) // Cool down between tests
 		}
+		
+		// Print framework summary
+		fmt.Printf("\n┌─ %s Summary ─────────────────────────────────────────────────────────────┐\n", fw)
+		fmt.Printf("│ %-10s │ %12s │ %12s │ %12s │ %12s │\n",
+			"Scenario", "MaxClients", "MaxRPS", "P95(ms)", "Time(s)")
+		fmt.Printf("├────────────┼──────────────┼──────────────┼──────────────┼──────────────┤\n")
+		for _, r := range fwResults {
+			fmt.Printf("│ %-10s │ %12d │ %12.0f │ %12.2f │ %12.1f │\n",
+				r.Scenario, r.MaxClients, r.MaxRPS, r.P95AtMax, r.TimeToDegrade)
+		}
+		fmt.Printf("└──────────────────────────────────────────────────────────────────────────┘\n")
 	}
 
 	printRampUpResults(results)
@@ -130,17 +150,11 @@ func rampUpTest(client *http.Client, url string, fw, sc string) RampUpResult {
 	measureTicker := time.NewTicker(measureWindow)
 	defer measureTicker.Stop()
 
-	// Ticker for progress updates (less frequent to reduce noise)
-	progressTicker := time.NewTicker(2 * time.Second)
-	defer progressTicker.Stop()
-
 	// Worker function with rate limiting
 	workerFunc := func() {
 		defer wg.Done()
 		atomic.AddInt32(&activeClients, 1)
 		defer atomic.AddInt32(&activeClients, -1)
-
-		firstError := true
 
 		for {
 			select {
@@ -157,11 +171,6 @@ func rampUpTest(client *http.Client, url string, fw, sc string) RampUpResult {
 			cancel()
 
 			success := err == nil && resp != nil && resp.StatusCode == 200
-
-			if err != nil && firstError {
-				fmt.Printf("  [ERROR] Request failed: %v\n", err)
-				firstError = false
-			}
 
 			if success {
 				_, _ = io.Copy(io.Discard, resp.Body)
@@ -192,11 +201,6 @@ func rampUpTest(client *http.Client, url string, fw, sc string) RampUpResult {
 			wg.Add(1)
 			go workerFunc()
 
-		case <-progressTicker.C:
-			// Show progress
-			clients := int(atomic.LoadInt32(&activeClients))
-			fmt.Printf("  [Progress] clients=%d elapsed=%.1fs\n", clients, time.Since(startTime).Seconds())
-
 		case <-measureTicker.C:
 			// Measure current p95
 			mu.Lock()
@@ -220,11 +224,9 @@ func rampUpTest(client *http.Client, url string, fw, sc string) RampUpResult {
 			clients := int(atomic.LoadInt32(&activeClients))
 
 			if len(recent) == 0 {
-				fmt.Printf("  [WARN] clients=%d measurements=%d successful=0 (no successful requests!)\n",
-					clients, totalCount)
 				// If we have clients but no successful requests, that's a problem
 				if clients > 10 {
-					fmt.Printf("  FAILED: No successful requests with %d clients\n", clients)
+					fmt.Printf("  ✗ FAILED: No successful requests with %d clients\n", clients)
 					testLoop = false
 				}
 				continue
@@ -232,8 +234,6 @@ func rampUpTest(client *http.Client, url string, fw, sc string) RampUpResult {
 
 			p95 := percentile(recent, 95)
 			rps := float64(successCount) / measureWindow.Seconds()
-
-			fmt.Printf("  clients=%d rps=%.0f p95=%.2fms\n", clients, rps, p95/1e6)
 
 			// Track max
 			if rps > maxRPS {
@@ -245,14 +245,13 @@ func rampUpTest(client *http.Client, url string, fw, sc string) RampUpResult {
 
 			// Check for degradation
 			if p95/1e6 > degradationThresh {
-				fmt.Printf("  DEGRADED: p95 %.2fms > threshold %.0fms\n", p95/1e6, degradationThresh)
+				fmt.Printf("  ⚠ Degraded: p95=%.2fms (threshold=%.0fms)\n", p95/1e6, degradationThresh)
 				testLoop = false
 				// no break; loop will exit after next select tick due to flag
 			}
 
 			// Check for timeout
 			if time.Since(startTime) > maxTestDuration {
-				fmt.Printf("  MAX DURATION reached\n")
 				testLoop = false
 				// no break; loop will exit after next select tick due to flag
 			}
@@ -352,6 +351,8 @@ func startCelerisHTTP2(sc string) (*ServerHandle, *http.Client) {
 	cfg.ReusePort = true // Let gnet accept on all loops when supported
 	cfg.Logger = log.New(io.Discard, "", 0)
 	cfg.Addr = freePort()
+	cfg.EnableH1 = false // HTTP/2 only
+	cfg.EnableH2 = true
 	srv := celeris.New(cfg)
 	go func() { _ = srv.ListenAndServe(r) }()
 	time.Sleep(500 * time.Millisecond)

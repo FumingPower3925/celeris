@@ -55,9 +55,16 @@ func main() {
 
 	var results []RampUpResult
 	for _, fw := range frameworks {
+		fmt.Printf("\n╔════════════════════════════════════════════════════════════════════════════════╗\n")
+		fmt.Printf("║ Testing Framework: %-60s ║\n", fw)
+		fmt.Printf("╚════════════════════════════════════════════════════════════════════════════════╝\n")
+		
+		var fwResults []RampUpResult
 		for _, sc := range scenarios {
+			fmt.Printf("\n→ Scenario: %s\n", sc)
 			srv, client := startServerHTTP1(fw, sc)
 			if srv == nil {
+				fmt.Printf("✗ FAILED to start server\n")
 				continue
 			}
 			url := "http://" + srv.Addr + scenarioPathStr(sc)
@@ -71,8 +78,25 @@ func main() {
 			_ = srv.Stop(ctx)
 			cancel()
 			results = append(results, r)
+			fwResults = append(fwResults, r)
+			
+			// Print immediate result for this scenario
+			fmt.Printf("✓ Complete: MaxClients=%d | MaxRPS=%.0f | P95=%.2fms | Time=%.1fs\n",
+				r.MaxClients, r.MaxRPS, r.P95AtMax, r.TimeToDegrade)
+			
 			time.Sleep(1 * time.Second) // Cool down between tests
 		}
+		
+		// Print framework summary
+		fmt.Printf("\n┌─ %s Summary ─────────────────────────────────────────────────────────────┐\n", fw)
+		fmt.Printf("│ %-10s │ %12s │ %12s │ %12s │ %12s │\n",
+			"Scenario", "MaxClients", "MaxRPS", "P95(ms)", "Time(s)")
+		fmt.Printf("├────────────┼──────────────┼──────────────┼──────────────┼──────────────┤\n")
+		for _, r := range fwResults {
+			fmt.Printf("│ %-10s │ %12d │ %12.0f │ %12.2f │ %12.1f │\n",
+				r.Scenario, r.MaxClients, r.MaxRPS, r.P95AtMax, r.TimeToDegrade)
+		}
+		fmt.Printf("└──────────────────────────────────────────────────────────────────────────┘\n")
 	}
 
 	printRampUpResults(results)
@@ -301,7 +325,8 @@ func startCelerisHTTP1(addr, scenario string) *ServerHandle {
 
 	config := celeris.DefaultConfig()
 	config.Addr = addr
-	config.EnableH2 = false // HTTP/1.1 only
+	config.EnableH1 = true  // HTTP/1.1 only
+	config.EnableH2 = false
 	// Silence server logs for clean benchmark output
 	config.Logger = log.New(io.Discard, "", 0)
 

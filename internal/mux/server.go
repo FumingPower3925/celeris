@@ -149,8 +149,10 @@ func (s *Server) Stop(ctx context.Context) error {
 	})
 
 	// Stop the gnet engine if it was started
-	if err := s.engine.Stop(ctx); err != nil {
-		s.logger.Printf("Error stopping gnet engine: %v", err)
+	if s.engine != nil {
+		if err := s.engine.Stop(ctx); err != nil {
+			s.logger.Printf("Error stopping gnet engine: %v", err)
+		}
 	}
 
 	s.logger.Println("Server shutdown complete")
