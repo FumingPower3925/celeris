@@ -7,16 +7,16 @@
 
 | Framework | Max Clients | Max RPS | P95 @ Max (ms) | Time to Degrade (s) |
 |-----------|------------:|--------:|---------------:|--------------------:|
-| celeris | 0 | 0 | 0.00 | 0.0 |
+| celeris | 939 | 110686 | 11.05 | 25.0 |
 
 ## Scenario: json
 
 | Framework | Max Clients | Max RPS | P95 @ Max (ms) | Time to Degrade (s) |
 |-----------|------------:|--------:|---------------:|--------------------:|
-| celeris | 39 | 1004 | 1.23 | 1.0 |
+| celeris | 280 | 74601 | 1.63 | 7.0 |
 
 ## Scenario: params
 
 | Framework | Max Clients | Max RPS | P95 @ Max (ms) | Time to Degrade (s) |
 |-----------|------------:|--------:|---------------:|--------------------:|
-| celeris | 39 | 1000 | 1.02 | 1.0 |
+| celeris | 1126 | 114987 | 12.69 | 30.0 |

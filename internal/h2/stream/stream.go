@@ -1168,7 +1168,7 @@ func (p *Processor) handleWindowUpdate(f *http2.WindowUpdateFrame) error {
 func (p *Processor) flushBufferedData(streamID uint32) {
 	s, ok := p.manager.GetStream(streamID)
 	if !ok || s.OutboundBuffer == nil {
-	// Stream not found or buffer nil
+		// Stream not found or buffer nil
 		return
 	}
 	// Attempting to flush buffered data
@@ -1232,6 +1232,17 @@ func (p *Processor) flushBufferedData(streamID uint32) {
 	}
 	//nolint:gosec // G115: safe conversion, chunk size bounded by flow control windows and MAX_FRAME_SIZE
 	p.manager.ConsumeSendWindow(streamID, int32(len(chunk)))
+
+	// If we ended the stream locally with this DATA write, update state
+	if endStream {
+		if s.EndStream {
+			// remote already ended -> now fully closed
+			s.SetState(StateClosed)
+		} else {
+			// remote still open -> half-closed local
+			s.SetState(StateHalfClosedLocal)
+		}
+	}
 }
 
 // FlushBufferedData exposes flushBufferedData for external callers that need

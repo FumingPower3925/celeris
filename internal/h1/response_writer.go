@@ -1,12 +1,12 @@
 package h1
 
 import (
-	"fmt"
-	"log"
-	"strconv"
-	"sync"
+    "fmt"
+    "log"
+    "strconv"
+    "sync"
 
-	"github.com/panjf2000/gnet/v2"
+    "github.com/panjf2000/gnet/v2"
 )
 
 // ResponseWriter handles HTTP/1.1 response writing with efficient batching.
@@ -61,9 +61,13 @@ func (w *ResponseWriter) WriteResponse(status int, headers [][2]string, body []b
 
 // writeStatusAndHeaders writes the HTTP status line and headers.
 func (w *ResponseWriter) writeStatusAndHeaders(status int, headers [][2]string, body []byte) {
-	// Build status line
-	statusLine := fmt.Sprintf("HTTP/1.1 %d %s\r\n", status, statusText(status))
-	w.pending = append(w.pending, []byte(statusLine))
+    // Build status line (fast-path for 200 OK)
+    if status == 200 {
+        w.pending = append(w.pending, []byte("HTTP/1.1 200 OK\r\n"))
+    } else {
+        statusLine := fmt.Sprintf("HTTP/1.1 %d %s\r\n", status, statusText(status))
+        w.pending = append(w.pending, []byte(statusLine))
+    }
 
 	// Determine if we should use chunked encoding
 	hasContentLength := false
@@ -82,15 +86,15 @@ func (w *ResponseWriter) writeStatusAndHeaders(status int, headers [][2]string, 
 		}
 	}
 
-	// If no content-length and no transfer-encoding, use chunked for streaming
-	if !hasContentLength && !hasTransferEncoding && w.keepAlive {
-		w.chunkedMode = true
-		headers = append(headers, [2]string{"transfer-encoding", "chunked"})
-	} else if !hasContentLength && !hasTransferEncoding && len(body) > 0 {
-		// If not keep-alive and no content-length, set it based on body
-		w.contentLength = int64(len(body))
-		headers = append(headers, [2]string{"content-length", strconv.FormatInt(w.contentLength, 10)})
-	}
+    // Prefer Content-Length when body is known to avoid chunked overhead
+    if !hasContentLength && !hasTransferEncoding && len(body) > 0 {
+        w.contentLength = int64(len(body))
+        headers = append(headers, [2]string{"content-length", strconv.FormatInt(w.contentLength, 10)})
+    } else if !hasContentLength && !hasTransferEncoding && w.keepAlive {
+        // Streaming or unknown length: use chunked if keeping connection alive
+        w.chunkedMode = true
+        headers = append(headers, [2]string{"transfer-encoding", "chunked"})
+    }
 
 	// Add Connection header
 	if w.keepAlive {

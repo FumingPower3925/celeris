@@ -9,8 +9,10 @@ import (
 	"io"
 	"log"
 	"math"
+	"net"
 	"net/http"
 	"os"
+	"runtime/pprof"
 	"sort"
 	"strconv"
 	"strings"
@@ -52,10 +54,10 @@ const (
 func main() {
 	// Check for FRAMEWORK environment variable to filter frameworks
 	selectedFramework := os.Getenv("FRAMEWORK")
-	
+
 	scenarios := []string{"simple", "json", "params"}
 	allFrameworks := []string{"celeris", "nethttp", "gin", "echo", "chi", "fiber"}
-	
+
 	var frameworks []string
 	if selectedFramework != "" {
 		// Run only the selected framework
@@ -72,7 +74,7 @@ func main() {
 		fmt.Printf("\n╔════════════════════════════════════════════════════════════════════════════════╗\n")
 		fmt.Printf("║ Testing Framework: %-60s ║\n", fw)
 		fmt.Printf("╚════════════════════════════════════════════════════════════════════════════════╝\n")
-		
+
 		var fwResults []RampUpResult
 		for _, sc := range scenarios {
 			fmt.Printf("\n→ Scenario: %s\n", sc)
@@ -86,21 +88,36 @@ func main() {
 			// Warm up server and ensure 200 OK is reachable
 			_ = warmup(client, url)
 
+			// Optional CPU profiling for Celeris only (enable with BENCH_CPU_PROFILE=1)
+			var profFile *os.File
+			if fw == "celeris" && os.Getenv("BENCH_CPU_PROFILE") == "1" {
+				f, err := os.Create("cpu-h1-celeris-" + sc + ".pprof")
+				if err == nil {
+					_ = pprof.StartCPUProfile(f)
+					profFile = f
+				}
+			}
+
 			r := rampUpTest(client, url, fw, sc)
+
+			if profFile != nil {
+				pprof.StopCPUProfile()
+				_ = profFile.Close()
+			}
 
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			_ = srv.Stop(ctx)
 			cancel()
 			results = append(results, r)
 			fwResults = append(fwResults, r)
-			
+
 			// Print immediate result for this scenario
 			fmt.Printf("✓ Complete: MaxClients=%d | MaxRPS=%.0f | P95=%.2fms | Time=%.1fs\n",
 				r.MaxClients, r.MaxRPS, r.P95AtMax, r.TimeToDegrade)
-			
+
 			time.Sleep(500 * time.Millisecond) // Cool down between tests
 		}
-		
+
 		// Print framework summary
 		fmt.Printf("\n┌─ %s Summary ─────────────────────────────────────────────────────────────┐\n", fw)
 		fmt.Printf("│ %-10s │ %12s │ %12s │ %12s │ %12s │\n",
@@ -131,8 +148,7 @@ func scenarioPathStr(sc string) string {
 }
 
 func startServerHTTP1(framework, scenario string) (*ServerHandle, *http.Client) {
-	port := ":8081"
-	addr := "127.0.0.1" + port
+	addr := "127.0.0.1" + freePort()
 
 	client := &http.Client{
 		Timeout: timeoutThresh,
@@ -159,6 +175,21 @@ func startServerHTTP1(framework, scenario string) (*ServerHandle, *http.Client) 
 	default:
 		return nil, nil
 	}
+}
+
+// freePort returns an available TCP port as a ":port" string.
+func freePort() string {
+	ln, err := net.Listen("tcp", ":0")
+	if err != nil {
+		panic(err)
+	}
+	defer ln.Close()
+	addr := ln.Addr().String()
+	i := strings.LastIndex(addr, ":")
+	if i == -1 {
+		return ":0"
+	}
+	return addr[i:]
 }
 
 func warmup(client *http.Client, url string) error {
@@ -339,7 +370,7 @@ func startCelerisHTTP1(addr, scenario string) *ServerHandle {
 
 	config := celeris.DefaultConfig()
 	config.Addr = addr
-	config.EnableH1 = true  // HTTP/1.1 only
+	config.EnableH1 = true // HTTP/1.1 only
 	config.EnableH2 = false
 	// Silence server logs for clean benchmark output
 	config.Logger = log.New(io.Discard, "", 0)

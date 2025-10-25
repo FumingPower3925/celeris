@@ -1,0 +1,129 @@
+File: bench-rampup-h1
+Type: cpu
+Time: 2025-10-25 17:38:48 CEST
+Duration: 30.12s, Total samples = 157.27s (522.15%)
+Showing nodes accounting for 145s, 92.20% of 157.27s total
+Dropped 663 nodes (cum <= 0.79s)
+      flat  flat%   sum%        cum   cum%
+    97.74s 62.15% 62.15%     97.81s 62.19%  syscall.syscall
+    18.97s 12.06% 74.21%     19.02s 12.09%  syscall.syscall6
+    13.37s  8.50% 82.71%     13.37s  8.50%  syscall.RawSyscall
+     3.57s  2.27% 84.98%      3.57s  2.27%  runtime.usleep
+     3.19s  2.03% 87.01%      3.20s  2.03%  runtime.pthread_cond_wait
+     3.07s  1.95% 88.96%      3.07s  1.95%  runtime.kevent
+     0.82s  0.52% 89.48%      0.82s  0.52%  runtime.pthread_kill
+     0.80s  0.51% 89.99%      0.84s  0.53%  runtime.typePointers.next
+     0.51s  0.32% 90.32%      0.88s  0.56%  runtime.pcvalue
+     0.48s  0.31% 90.62%      2.26s  1.44%  runtime.scanobject
+     0.30s  0.19% 90.81%      0.79s   0.5%  runtime.selectgo
+     0.25s  0.16% 90.97%      1.29s  0.82%  runtime.mallocgcSmallScanNoHeader
+     0.23s  0.15% 91.12%      4.35s  2.77%  runtime.mallocgc
+     0.20s  0.13% 91.24%      4.57s  2.91%  runtime.lock2
+     0.14s 0.089% 91.33%      1.58s  1.00%  net/http.(*Transport).tryPutIdleConn
+     0.11s  0.07% 91.40%      1.16s  0.74%  runtime.scanframeworker
+     0.09s 0.057% 91.46%      1.34s  0.85%  internal/sync.(*Mutex).Unlock (inline)
+     0.07s 0.045% 91.51%      1.04s  0.66%  internal/sync.(*Mutex).Lock (inline)
+     0.06s 0.038% 91.54%     26.45s 16.82%  github.com/panjf2000/gnet/v2.(*eventloop).read
+     0.06s 0.038% 91.58%     80.75s 51.34%  internal/poll.ignoringEINTRIO (inline)
+     0.06s 0.038% 91.62%      2.20s  1.40%  runtime.gcDrainN
+     0.06s 0.038% 91.66%      0.99s  0.63%  runtime.semacquire1
+     0.06s 0.038% 91.70%      0.79s   0.5%  runtime.wakep
+     0.05s 0.032% 91.73%      1.26s   0.8%  net/url.parse
+     0.04s 0.025% 91.75%      5.57s  3.54%  net/http.(*Client).Get
+     0.04s 0.025% 91.78%      4.04s  2.57%  net/http.(*Client).do
+     0.03s 0.019% 91.80%     51.23s 32.57%  github.com/panjf2000/gnet/v2/pkg/netpoll.(*Poller).Polling
+     0.03s 0.019% 91.82%      6.31s  4.01%  main.rampUpTest.func1
+     0.03s 0.019% 91.84%     40.42s 25.70%  net.(*conn).Read
+     0.03s 0.019% 91.85%      1.09s  0.69%  net/http.(*Request).write
+     0.03s 0.019% 91.87%     43.63s 27.74%  net/http.(*persistConn).readLoop
+     0.03s 0.019% 91.89%      4.36s  2.77%  runtime.gcDrain
+     0.03s 0.019% 91.91%      3.49s  2.22%  runtime.markroot
+     0.03s 0.019% 91.93%      4.50s  2.86%  runtime.park_m
+     0.02s 0.013% 91.94%      9.31s  5.92%  github.com/albertbausili/celeris/internal/mux.(*Server).OnTraffic
+     0.02s 0.013% 91.96%      7.73s  4.92%  github.com/panjf2000/gnet/v2/pkg/netpoll.(*Poller).Trigger
+     0.02s 0.013% 91.97%      0.97s  0.62%  internal/sync.(*Mutex).lockSlow
+     0.02s 0.013% 91.98%      1.25s  0.79%  internal/sync.(*Mutex).unlockSlow
+     0.02s 0.013% 91.99%      1.23s  0.78%  internal/sync.runtime_Semrelease
+     0.02s 0.013% 92.01%      1.82s  1.16%  net/http.(*Transport).getConn
+     0.02s 0.013% 92.02%      1.63s  1.04%  net/http.(*Transport).queueForIdleConn
+     0.02s 0.013% 92.03%      1.60s  1.02%  net/http.(*persistConn).readLoop.func2
+     0.02s 0.013% 92.05%     41.71s 26.52%  net/http.(*persistConn).writeLoop
+     0.02s 0.013% 92.06%      2.81s  1.79%  runtime.newobject
+     0.02s 0.013% 92.07%      3.05s  1.94%  runtime.scanstack
+     0.02s 0.013% 92.08%      5.46s  3.47%  runtime.schedule
+     0.01s 0.0064% 92.09%     40.44s 25.71%  bufio.(*Reader).Peek
+     0.01s 0.0064% 92.10%      7.86s  5.00%  github.com/albertbausili/celeris/internal/h1.(*ResponseWriter).flush
+     0.01s 0.0064% 92.10%      8.37s  5.32%  github.com/albertbausili/celeris/pkg/celeris.(*Router).ServeHTTP2
+     0.01s 0.0064% 92.11%     19.01s 12.09%  golang.org/x/sys/unix.Kevent
+     0.01s 0.0064% 92.12%      0.91s  0.58%  internal/sync.runtime_SemacquireMutex
+     0.01s 0.0064% 92.12%     40.48s 25.74%  net.(*conn).Write
+     0.01s 0.0064% 92.13%      3.85s  2.45%  net/http.(*Client).send
+     0.01s 0.0064% 92.13%      3.30s  2.10%  net/http.(*Transport).RoundTrip
+     0.01s 0.0064% 92.14%      1.49s  0.95%  net/http.NewRequestWithContext
+     0.01s 0.0064% 92.15%      2.53s  1.61%  runtime.deductAssistCredit
+     0.01s 0.0064% 92.15%      5.18s  3.29%  runtime.findRunnable
+     0.01s 0.0064% 92.16%      2.26s  1.44%  runtime.gcAssistAlloc.func2
+     0.01s 0.0064% 92.17%      2.25s  1.43%  runtime.gcAssistAlloc1
+     0.01s 0.0064% 92.17%      2.81s  1.79%  runtime.lock (inline)
+     0.01s 0.0064% 92.18%      0.90s  0.57%  runtime.shrinkstack
+     0.01s 0.0064% 92.19%      1.05s  0.67%  sync.(*Mutex).Lock (inline)
+     0.01s 0.0064% 92.19%      1.35s  0.86%  sync.(*Mutex).Unlock
+     0.01s 0.0064% 92.20%     40.46s 25.73%  syscall.write
+         0     0% 92.20%     40.43s 25.71%  bufio.(*Reader).fill
+         0     0% 92.20%     40.48s 25.74%  bufio.(*Writer).Flush
+         0     0% 92.20%      9.24s  5.88%  github.com/albertbausili/celeris/internal/h1.(*Connection).HandleData
+         0     0% 92.20%      9.03s  5.74%  github.com/albertbausili/celeris/internal/h1.(*Connection).handleRequest
+         0     0% 92.20%      8.24s  5.24%  github.com/albertbausili/celeris/internal/h1.(*ResponseWriter).WriteResponse
+         0     0% 92.20%      9.28s  5.90%  github.com/albertbausili/celeris/internal/h1.(*Server).OnTraffic
+         0     0% 92.20%      8.24s  5.24%  github.com/albertbausili/celeris/internal/h1.(*h1ResponseWriter).WriteResponse
+         0     0% 92.20%      8.35s  5.31%  github.com/albertbausili/celeris/pkg/celeris.(*Context).String
+         0     0% 92.20%      8.24s  5.24%  github.com/albertbausili/celeris/pkg/celeris.(*Context).flush
+         0     0% 92.20%      8.71s  5.54%  github.com/albertbausili/celeris/pkg/celeris.(*streamHandlerAdapter).HandleStream
+         0     0% 92.20%      8.24s  5.24%  github.com/albertbausili/celeris/pkg/celeris.(*streamHandlerAdapter).HandleStream.func1
+         0     0% 92.20%      8.35s  5.31%  github.com/albertbausili/celeris/pkg/celeris.HandlerFunc.ServeHTTP2
+         0     0% 92.20%      7.81s  4.97%  github.com/panjf2000/gnet/v2.(*conn).AsyncWritev
+         0     0% 92.20%     13.37s  8.50%  github.com/panjf2000/gnet/v2.(*conn).asyncWritev
+         0     0% 92.20%     26.45s 16.82%  github.com/panjf2000/gnet/v2.(*conn).processIO
+         0     0% 92.20%     13.37s  8.50%  github.com/panjf2000/gnet/v2.(*conn).writev
+         0     0% 92.20%     51.21s 32.56%  github.com/panjf2000/gnet/v2.(*eventloop).orbit
+         0     0% 92.20%     13.37s  8.50%  github.com/panjf2000/gnet/v2/pkg/io.Writev
+         0     0% 92.20%      7.67s  4.88%  github.com/panjf2000/gnet/v2/pkg/netpoll.(*Poller).wakePoller
+         0     0% 92.20%     51.23s 32.57%  golang.org/x/sync/errgroup.(*Group).Go.func1
+         0     0% 92.20%     17.06s 10.85%  golang.org/x/sys/unix.Read (inline)
+         0     0% 92.20%        19s 12.08%  golang.org/x/sys/unix.kevent
+         0     0% 92.20%     17.06s 10.85%  golang.org/x/sys/unix.read
+         0     0% 92.20%     40.39s 25.68%  internal/poll.(*FD).Read
+         0     0% 92.20%     40.46s 25.73%  internal/poll.(*FD).Write
+         0     0% 92.20%      8.35s  5.31%  main.startCelerisHTTP1.func1
+         0     0% 92.20%     40.39s 25.68%  net.(*netFD).Read
+         0     0% 92.20%     40.46s 25.73%  net.(*netFD).Write
+         0     0% 92.20%      4.04s  2.57%  net/http.(*Client).Do (inline)
+         0     0% 92.20%      3.29s  2.09%  net/http.(*Transport).roundTrip
+         0     0% 92.20%     40.42s 25.70%  net/http.(*persistConn).Read
+         0     0% 92.20%      1.49s  0.95%  net/http.NewRequest (inline)
+         0     0% 92.20%     40.48s 25.74%  net/http.persistConnWriter.Write
+         0     0% 92.20%      3.84s  2.44%  net/http.send
+         0     0% 92.20%      1.27s  0.81%  net/url.Parse
+         0     0% 92.20%      1.17s  0.74%  runtime.copystack
+         0     0% 92.20%      2.70s  1.72%  runtime.exitsyscall0
+         0     0% 92.20%      2.52s  1.60%  runtime.gcAssistAlloc
+         0     0% 92.20%      3.12s  1.98%  runtime.gcBgMarkWorker
+         0     0% 92.20%      4.36s  2.77%  runtime.gcBgMarkWorker.func2
+         0     0% 92.20%      4.34s  2.76%  runtime.gcDrainMarkWorkerDedicated (inline)
+         0     0% 92.20%      4.57s  2.91%  runtime.lockWithRank (inline)
+         0     0% 92.20%      2.20s  1.40%  runtime.mPark (inline)
+         0     0% 92.20%      3.33s  2.12%  runtime.markroot.func1
+         0     0% 92.20%      7.84s  4.99%  runtime.mcall
+         0     0% 92.20%      3.09s  1.96%  runtime.netpoll
+         0     0% 92.20%      2.20s  1.40%  runtime.notesleep
+         0     0% 92.20%      3.15s  2.00%  runtime.osyield (inline)
+         0     0% 92.20%      0.82s  0.52%  runtime.preemptM
+         0     0% 92.20%      0.91s  0.58%  runtime.ready
+         0     0% 92.20%      3.22s  2.05%  runtime.semasleep
+         0     0% 92.20%      1.22s  0.78%  runtime.semrelease1
+         0     0% 92.20%      0.82s  0.52%  runtime.signalM (inline)
+         0     0% 92.20%      2.29s  1.46%  runtime.stopm
+         0     0% 92.20%      8.09s  5.14%  runtime.systemstack
+         0     0% 92.20%     40.22s 25.57%  syscall.Read (inline)
+         0     0% 92.20%     40.46s 25.73%  syscall.Write (inline)
+         0     0% 92.20%     40.22s 25.57%  syscall.read

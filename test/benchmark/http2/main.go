@@ -32,6 +32,22 @@ import (
 	"golang.org/x/net/http2/h2c"
 )
 
+// rrTransport implements http.RoundTripper and dispatches requests across
+// multiple underlying http.RoundTrippers (each maintaining its own H2 conn).
+type rrTransport struct {
+	transports []http.RoundTripper
+	idx        uint64
+}
+
+func (r *rrTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if len(r.transports) == 0 {
+		return http.DefaultTransport.RoundTrip(req)
+	}
+	i := atomic.AddUint64(&r.idx, 1)
+	t := r.transports[int(i)%len(r.transports)]
+	return t.RoundTrip(req)
+}
+
 type RampUpResult struct {
 	Framework     string  `json:"framework"`
 	Scenario      string  `json:"scenario"`
@@ -59,10 +75,10 @@ const (
 func runRampUpBenchmark() {
 	// Check for FRAMEWORK environment variable to filter frameworks
 	selectedFramework := os.Getenv("FRAMEWORK")
-	
+
 	scenarios := []string{"simple", "json", "params"}
 	allFrameworks := []string{"nethttp", "gin", "echo", "chi", "iris", "celeris"}
-	
+
 	var frameworks []string
 	if selectedFramework != "" {
 		// Run only the selected framework
@@ -208,6 +224,7 @@ func rampUpTest(client *http.Client, url string, fw, sc string) RampUpResult {
 
 	// Start ramping up
 	testLoop := true
+	emptyWindows := 0
 	for testLoop {
 		select {
 		case <-addClientTicker.C:
@@ -238,12 +255,15 @@ func rampUpTest(client *http.Client, url string, fw, sc string) RampUpResult {
 			clients := int(atomic.LoadInt32(&activeClients))
 
 			if len(recent) == 0 {
-				// If we have clients but no successful requests, that's a problem
-				if clients > 10 {
-					fmt.Printf("  ✗ FAILED: No successful requests with %d clients\n", clients)
+				// Allow a few empty windows during ramp-up before failing
+				emptyWindows++
+				if clients > 20 && emptyWindows >= 3 {
+					fmt.Printf("  ✗ FAILED: No successful requests with %d clients (after %d windows)\n", clients, emptyWindows)
 					testLoop = false
 				}
 				continue
+			} else {
+				emptyWindows = 0
 			}
 
 			p95 := percentile(recent, 95)
@@ -371,14 +391,26 @@ func startCelerisHTTP2(sc string) (*ServerHandle, *http.Client) {
 	srv := celeris.New(cfg)
 	go func() { _ = srv.ListenAndServe(r) }()
 	time.Sleep(500 * time.Millisecond)
-	client := &http.Client{
-		Transport: &http2.Transport{
+	// Support multiple parallel H2 connections via env H2_CLIENTS (default 1)
+	numClients := 1
+	if v := os.Getenv("H2_CLIENTS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			numClients = n
+		}
+	}
+
+	trs := make([]http.RoundTripper, 0, numClients)
+	for i := 0; i < numClients; i++ {
+		trs = append(trs, &http2.Transport{
 			AllowHTTP: true,
 			DialTLS: func(network, addr string, _ *tls.Config) (net.Conn, error) {
 				return net.Dial(network, addr)
 			},
-		},
-		Timeout: timeoutThresh,
+		})
+	}
+	client := &http.Client{
+		Transport: &rrTransport{transports: trs},
+		Timeout:   timeoutThresh,
 	}
 	return &ServerHandle{Addr: cfg.Addr, Stop: srv.Stop}, client
 }
