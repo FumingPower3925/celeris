@@ -30,18 +30,18 @@ const (
 // Server implements the gnet.EventHandler interface for HTTP/2
 type Server struct {
 	gnet.BuiltinEventEngine
-	handler         stream.Handler
-	ctx             context.Context
-	cancel          context.CancelFunc
-	addr            string
-	multicore       bool
-	numEventLoop    int
-	reusePort       bool
-	logger          *log.Logger
-	engine          gnet.Engine
-	maxStreams      uint32
-	activeConns     []gnet.Conn // Track connections for shutdown only
-	activeConnsMu   sync.Mutex  // Protects activeConns
+	handler       stream.Handler
+	ctx           context.Context
+	cancel        context.CancelFunc
+	addr          string
+	multicore     bool
+	numEventLoop  int
+	reusePort     bool
+	logger        *log.Logger
+	engine        gnet.Engine
+	maxStreams    uint32
+	activeConns   []gnet.Conn // Track connections for shutdown only
+	activeConnsMu sync.Mutex  // Protects activeConns
 }
 
 // headersSlicePool reuses small header slices to reduce allocations per response.
@@ -159,12 +159,12 @@ func (s *Server) OnBoot(eng gnet.Engine) gnet.Action {
 func (s *Server) OnOpen(c gnet.Conn) ([]byte, gnet.Action) {
 	conn := NewConnection(c, s.handler, s.logger, s.maxStreams)
 	c.SetContext(conn) // Use gnet.Conn.Context() for per-connection storage (best practice)
-	
+
 	// Track for shutdown
 	s.activeConnsMu.Lock()
 	s.activeConns = append(s.activeConns, c)
 	s.activeConnsMu.Unlock()
-	
+
 	s.logger.Printf("New connection from %s", c.RemoteAddr().String())
 	return nil, gnet.None
 }
@@ -1477,7 +1477,7 @@ func (c *Connection) IsStreamClosed(streamID uint32) bool {
 // This is used by the multiplexer to register connections.
 func (s *Server) StoreConnection(c gnet.Conn, conn *Connection) {
 	c.SetContext(conn)
-	
+
 	// Also track for shutdown
 	s.activeConnsMu.Lock()
 	s.activeConns = append(s.activeConns, c)
