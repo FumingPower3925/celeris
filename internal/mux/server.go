@@ -28,16 +28,17 @@ type Server struct {
 	h1Server *h1.Server
 	h2Server *h2transport.Server
 
-	handler      stream.Handler
-	connections  sync.Map // map[gnet.Conn]*connSession
-	ctx          context.Context
-	cancel       context.CancelFunc
-	addr         string
-	multicore    bool
-	numEventLoop int
-	reusePort    bool
-	logger       *log.Logger
-	engine       gnet.Engine
+	handler       stream.Handler
+	connections   sync.Map // map[gnet.Conn]*connSession
+	ctx           context.Context
+	cancel        context.CancelFunc
+	addr          string
+	multicore     bool
+	numEventLoop  int
+	reusePort     bool
+	logger        *log.Logger
+	engine        gnet.Engine
+	engineStarted bool
 
 	enableH1 bool
 	enableH2 bool
@@ -149,7 +150,7 @@ func (s *Server) Stop(ctx context.Context) error {
 	})
 
 	// Stop the gnet engine if it was started
-	if s.engine != nil {
+	if s.engineStarted {
 		if err := s.engine.Stop(ctx); err != nil {
 			s.logger.Printf("Error stopping gnet engine: %v", err)
 		}
@@ -162,6 +163,7 @@ func (s *Server) Stop(ctx context.Context) error {
 // OnBoot is called when the server is ready to accept connections.
 func (s *Server) OnBoot(eng gnet.Engine) gnet.Action {
 	s.engine = eng
+	s.engineStarted = true
 
 	// Initialize sub-servers if needed
 	if s.h2Server != nil {
