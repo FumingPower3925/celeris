@@ -23,6 +23,8 @@ import (
 	"runtime"
 	"runtime/pprof"
 
+	_ "net/http/pprof"
+
 	"github.com/albertbausili/celeris/pkg/celeris"
 	"github.com/gin-gonic/gin"
 	"github.com/go-chi/chi/v5"
@@ -73,13 +75,19 @@ const (
 )
 
 func runRampUpBenchmark() {
+	// Optional: start server-side pprof endpoint
+	if os.Getenv("BENCH_SERVER_PPROF") == "1" {
+		go func() {
+			_ = http.ListenAndServe("127.0.0.1:6060", nil)
+		}()
+	}
 	// Check for FRAMEWORK environment variable to filter frameworks
 	selectedFramework := os.Getenv("FRAMEWORK")
 
-    scenarios := []string{"simple", "json", "params"}
-    if os.Getenv("H2_ENABLE_PUSH") == "1" {
-        scenarios = append(scenarios, "push")
-    }
+	scenarios := []string{"simple", "json", "params"}
+	if os.Getenv("H2_ENABLE_PUSH") == "1" {
+		scenarios = append(scenarios, "push")
+	}
 	allFrameworks := []string{"nethttp", "gin", "echo", "chi", "iris", "celeris"}
 
 	var frameworks []string
@@ -359,7 +367,7 @@ func startServerHTTP2(fw, sc string) (*ServerHandle, *http.Client) {
 
 func startCelerisHTTP2(sc string) (*ServerHandle, *http.Client) {
 	r := celeris.NewRouter()
-    switch sc {
+	switch sc {
 	case "simple":
 		r.GET("/bench", func(ctx *celeris.Context) error {
 			// Demonstrate server push of a tiny resource (header-only push)
@@ -379,18 +387,18 @@ func startCelerisHTTP2(sc string) (*ServerHandle, *http.Client) {
 				"post_id": celeris.Param(ctx, "postId"),
 			})
 		})
-    case "push":
-        // Push multiple small resources and serve them
-        r.GET("/bench", func(ctx *celeris.Context) error {
-            _ = ctx.PushPromise("/pushed-a.txt", nil)
-            _ = ctx.PushPromise("/pushed-b.txt", nil)
-            _ = ctx.PushPromise("/pushed-c.txt", nil)
-            return ctx.String(200, "ok")
-        })
-        r.GET("/pushed-a.txt", func(ctx *celeris.Context) error { return ctx.String(200, "A") })
-        r.GET("/pushed-b.txt", func(ctx *celeris.Context) error { return ctx.String(200, "B") })
-        r.GET("/pushed-c.txt", func(ctx *celeris.Context) error { return ctx.String(200, "C") })
-    }
+	case "push":
+		// Push multiple small resources and serve them
+		r.GET("/bench", func(ctx *celeris.Context) error {
+			_ = ctx.PushPromise("/pushed-a.txt", nil)
+			_ = ctx.PushPromise("/pushed-b.txt", nil)
+			_ = ctx.PushPromise("/pushed-c.txt", nil)
+			return ctx.String(200, "ok")
+		})
+		r.GET("/pushed-a.txt", func(ctx *celeris.Context) error { return ctx.String(200, "A") })
+		r.GET("/pushed-b.txt", func(ctx *celeris.Context) error { return ctx.String(200, "B") })
+		r.GET("/pushed-c.txt", func(ctx *celeris.Context) error { return ctx.String(200, "C") })
+	}
 	cfg := celeris.DefaultConfig()
 	// Auto-tune event loops to CPUs (leave headroom for client+OS)
 	cpus := runtime.GOMAXPROCS(0)
@@ -412,8 +420,8 @@ func startCelerisHTTP2(sc string) (*ServerHandle, *http.Client) {
 	srv := celeris.New(cfg)
 	go func() { _ = srv.ListenAndServe(r) }()
 	time.Sleep(500 * time.Millisecond)
-	// Support multiple parallel H2 connections via env H2_CLIENTS (default 8)
-	numClients := 8
+	// Support multiple parallel H2 connections via env H2_CLIENTS (default 4)
+	numClients := 4
 	if v := os.Getenv("H2_CLIENTS"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			numClients = n

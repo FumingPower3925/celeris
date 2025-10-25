@@ -1127,18 +1127,18 @@ func (c *Connection) WriteResponse(streamID uint32, status int, headers [][2]str
 		return fmt.Errorf("failed to encode headers: %w", err)
 	}
 
-    // Acquire per-stream lock to reduce cross-stream contention; fall back to conn lock if missing
-    var perStream *stream.Stream
-    if st, ok := c.processor.GetManager().GetStream(streamID); ok {
-        perStream = st
-    }
-    if perStream != nil {
-        perStream.WriteLock()
-        defer perStream.WriteUnlock()
-    } else {
-        c.writeMu.Lock()
-        defer c.writeMu.Unlock()
-    }
+	// Acquire per-stream lock to reduce cross-stream contention; fall back to conn lock if missing
+	var perStream *stream.Stream
+	if st, ok := c.processor.GetManager().GetStream(streamID); ok {
+		perStream = st
+	}
+	if perStream != nil {
+		perStream.WriteLock()
+		defer perStream.WriteUnlock()
+	} else {
+		c.writeMu.Lock()
+		defer c.writeMu.Unlock()
+	}
 
 	// Write HEADERS (and CONTINUATION) respecting peer MAX_FRAME_SIZE
 	// If no body is present, we can end the stream with HEADERS (END_STREAM) to avoid zero-length DATA later

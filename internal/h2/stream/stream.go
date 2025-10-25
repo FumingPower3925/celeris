@@ -53,7 +53,7 @@ type Stream struct {
 	WindowSize             int32
 	ReceivedWindowUpd      chan int32
 	mu                     sync.RWMutex
-    writeMu                sync.Mutex
+	writeMu                sync.Mutex
 	ResponseWriter         ResponseWriter // Connection for writing responses
 	ReceivedDataLen        int            // Track total data received for content-length validation
 	ReceivedInitialHeaders bool
@@ -82,7 +82,7 @@ func getBuf() *bytes.Buffer {
 // NewStream creates a new stream
 func NewStream(id uint32) *Stream {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &Stream{
+	s := &Stream{
 		ID:                id,
 		State:             StateIdle,
 		Data:              getBuf(),
@@ -93,6 +93,7 @@ func NewStream(id uint32) *Stream {
 		cancel:            cancel,
 		phase:             PhaseInit,
 	}
+	return s
 }
 
 // AddHeader adds a header to the stream
@@ -1225,14 +1226,34 @@ func (p *Processor) flushBufferedData(streamID uint32) {
 				break
 			}
 		}
+		// Adaptive coalescing: if windows and buffer allow, target at least 4 KiB per DATA
+		if allow < 4096 {
+			target := 4096
+			if int(connWin) < target {
+				target = int(connWin)
+			}
+			if int(strWin) < target {
+				target = int(strWin)
+			}
+			if int(maxFrame) < target {
+				target = int(maxFrame)
+			}
+			if s.OutboundBuffer.Len() < target {
+				target = s.OutboundBuffer.Len()
+			}
+			if target > allow {
+				allow = target
+			}
+		}
 		if allow > s.OutboundBuffer.Len() {
 			allow = s.OutboundBuffer.Len()
 		}
 		if allow <= 0 {
 			break
 		}
-		chunk := make([]byte, allow)
-		if _, err := s.OutboundBuffer.Read(chunk); err != nil {
+		// Zero-copy slice out of the buffer
+		chunk := s.OutboundBuffer.Next(allow)
+		if len(chunk) == 0 {
 			break
 		}
 		endStream := s.OutboundBuffer.Len() == 0 && s.OutboundEndStream && !isStreaming

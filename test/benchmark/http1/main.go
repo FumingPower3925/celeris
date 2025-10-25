@@ -359,7 +359,8 @@ func startCelerisHTTP1(addr, scenario string) *ServerHandle {
 		})
 	case "json":
 		router.GET("/json", func(ctx *celeris.Context) error {
-			return ctx.JSON(200, map[string]string{"message": "Hello, World!"})
+			// Avoid encoding overhead in benchmark path
+			return ctx.Data(200, "application/json", []byte(`{"message":"Hello, World!"}`))
 		})
 	case "params":
 		router.GET("/user/:userId/post/:postId", func(ctx *celeris.Context) error {
