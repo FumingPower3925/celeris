@@ -347,12 +347,13 @@ func startCelerisHTTP2(sc string) (*ServerHandle, *http.Client) {
 	} else {
 		cfg.NumEventLoop = cpus - 2
 	}
-	cfg.Multicore = true // Enable multicore for maximum performance
-	cfg.ReusePort = true // Let gnet accept on all loops when supported
+	cfg.Multicore = true                // Enable multicore for maximum performance
+	cfg.ReusePort = true                // Let gnet accept on all loops when supported
 	cfg.Logger = log.New(io.Discard, "", 0)
 	cfg.Addr = freePort()
-	cfg.EnableH1 = false // HTTP/2 only
+	cfg.EnableH1 = false                // HTTP/2 only
 	cfg.EnableH2 = true
+	cfg.MaxConcurrentStreams = 250      // Support more concurrent streams for benchmarking
 	srv := celeris.New(cfg)
 	go func() { _ = srv.ListenAndServe(r) }()
 	time.Sleep(500 * time.Millisecond)

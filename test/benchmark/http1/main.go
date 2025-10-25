@@ -84,7 +84,7 @@ func main() {
 			fmt.Printf("✓ Complete: MaxClients=%d | MaxRPS=%.0f | P95=%.2fms | Time=%.1fs\n",
 				r.MaxClients, r.MaxRPS, r.P95AtMax, r.TimeToDegrade)
 			
-			time.Sleep(2 * time.Second) // Cool down between tests (increased from 1s)
+			time.Sleep(500 * time.Millisecond) // Cool down between tests
 		}
 		
 		// Print framework summary

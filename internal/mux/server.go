@@ -141,7 +141,7 @@ func (s *Server) Stop(ctx context.Context) error {
 	s.logger.Println("Initiating graceful shutdown...")
 	s.cancel()
 
-	// Close all connections
+	// Close all connections first
 	s.connections.Range(func(key, _ interface{}) bool {
 		if gnetConn, ok := key.(gnet.Conn); ok {
 			_ = gnetConn.Close()
@@ -150,9 +150,11 @@ func (s *Server) Stop(ctx context.Context) error {
 	})
 
 	// Stop the gnet engine if it was started
+	// gnet.Engine.Stop() is blocking and waits for all event loops to finish
 	if s.engineStarted {
 		if err := s.engine.Stop(ctx); err != nil {
 			s.logger.Printf("Error stopping gnet engine: %v", err)
+			return err
 		}
 	}
 
