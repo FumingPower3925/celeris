@@ -3,7 +3,6 @@ package h1
 import (
 	"context"
 	"log"
-	"sync"
 
 	"github.com/albertbausili/celeris/internal/h2/stream"
 	"github.com/panjf2000/gnet/v2"
@@ -11,10 +10,9 @@ import (
 
 // Server implements gnet.EventHandler for HTTP/1.1.
 type Server struct {
-	handler     stream.Handler
-	connections sync.Map // map[gnet.Conn]*Connection
-	ctx         context.Context
-	logger      *log.Logger
+	handler stream.Handler
+	ctx     context.Context
+	logger  *log.Logger
 }
 
 // NewServer creates a new HTTP/1.1 server.
@@ -33,18 +31,17 @@ func NewServer(ctx context.Context, handler stream.Handler, logger *log.Logger) 
 // OnOpen is called when a new connection is opened.
 func (s *Server) OnOpen(c gnet.Conn) ([]byte, gnet.Action) {
 	conn := NewConnection(s.ctx, c, s.handler, s.logger)
-	s.connections.Store(c, conn)
+	c.SetContext(conn) // Use gnet.Conn.Context() for per-connection storage (best practice)
 	s.logger.Printf("HTTP/1.1 connection from %s", c.RemoteAddr().String())
 	return nil, gnet.None
 }
 
 // OnClose is called when a connection is closed.
 func (s *Server) OnClose(c gnet.Conn, err error) gnet.Action {
-	if conn, ok := s.connections.Load(c); ok {
-		if httpConn, ok := conn.(*Connection); ok {
+	if ctx := c.Context(); ctx != nil {
+		if httpConn, ok := ctx.(*Connection); ok {
 			_ = httpConn.Close()
 		}
-		s.connections.Delete(c)
 	}
 
 	if err != nil {
@@ -58,13 +55,17 @@ func (s *Server) OnClose(c gnet.Conn, err error) gnet.Action {
 
 // OnTraffic is called when data is received on a connection.
 func (s *Server) OnTraffic(c gnet.Conn) gnet.Action {
-	connValue, ok := s.connections.Load(c)
-	if !ok {
-		s.logger.Printf("HTTP/1.1 connection not found in map")
+	ctx := c.Context()
+	if ctx == nil {
+		s.logger.Printf("HTTP/1.1 connection context not found")
 		return gnet.Close
 	}
 
-	conn := connValue.(*Connection)
+	conn, ok := ctx.(*Connection)
+	if !ok {
+		s.logger.Printf("HTTP/1.1 invalid connection context type")
+		return gnet.Close
+	}
 
 	// Read all available data
 	buf, err := c.Next(-1)
@@ -82,8 +83,8 @@ func (s *Server) OnTraffic(c gnet.Conn) gnet.Action {
 	return gnet.None
 }
 
-// StoreConnection stores a connection in the server's connections map.
+// StoreConnection is kept for compatibility but now uses Conn.Context().
 // This is used by the multiplexer to register connections.
 func (s *Server) StoreConnection(c gnet.Conn, conn *Connection) {
-	s.connections.Store(c, conn)
+	c.SetContext(conn)
 }

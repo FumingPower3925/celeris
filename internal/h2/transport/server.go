@@ -30,17 +30,18 @@ const (
 // Server implements the gnet.EventHandler interface for HTTP/2
 type Server struct {
 	gnet.BuiltinEventEngine
-	handler      stream.Handler
-	connections  sync.Map // map[gnet.Conn]*Connection
-	ctx          context.Context
-	cancel       context.CancelFunc
-	addr         string
-	multicore    bool
-	numEventLoop int
-	reusePort    bool
-	logger       *log.Logger
-	engine       gnet.Engine
-	maxStreams   uint32
+	handler         stream.Handler
+	ctx             context.Context
+	cancel          context.CancelFunc
+	addr            string
+	multicore       bool
+	numEventLoop    int
+	reusePort       bool
+	logger          *log.Logger
+	engine          gnet.Engine
+	maxStreams      uint32
+	activeConns     []gnet.Conn // Track connections for shutdown only
+	activeConnsMu   sync.Mutex  // Protects activeConns
 }
 
 // headersSlicePool reuses small header slices to reduce allocations per response.
@@ -108,23 +109,26 @@ func (s *Server) Stop(ctx context.Context) error {
 	s.cancel()
 
 	// Send GOAWAY to all active connections and wait for streams to complete
-	s.connections.Range(func(_, value interface{}) bool {
-		if conn, ok := value.(*Connection); ok {
-			_ = conn.Shutdown(ctx)
+	s.activeConnsMu.Lock()
+	conns := make([]gnet.Conn, len(s.activeConns))
+	copy(conns, s.activeConns)
+	s.activeConnsMu.Unlock()
+
+	for _, c := range conns {
+		if connCtx := c.Context(); connCtx != nil {
+			if conn, ok := connCtx.(*Connection); ok {
+				_ = conn.Shutdown(ctx)
+			}
 		}
-		return true
-	})
+	}
 
 	// Give a very brief moment for streams to finish, then force close connections
 	time.Sleep(50 * time.Millisecond)
 
-	s.connections.Range(func(key, _ interface{}) bool {
-		if gnetConn, ok := key.(gnet.Conn); ok {
-			s.logger.Printf("Force closing connection to %s", gnetConn.RemoteAddr().String())
-			_ = gnetConn.Close()
-		}
-		return true
-	})
+	for _, c := range conns {
+		s.logger.Printf("Force closing connection to %s", c.RemoteAddr().String())
+		_ = c.Close()
+	}
 
 	// Wait briefly for OnClose to be called and connections to be removed
 	time.Sleep(50 * time.Millisecond)
@@ -154,19 +158,36 @@ func (s *Server) OnBoot(eng gnet.Engine) gnet.Action {
 // OnOpen is called when a new connection is opened
 func (s *Server) OnOpen(c gnet.Conn) ([]byte, gnet.Action) {
 	conn := NewConnection(c, s.handler, s.logger, s.maxStreams)
-	s.connections.Store(c, conn)
+	c.SetContext(conn) // Use gnet.Conn.Context() for per-connection storage (best practice)
+	
+	// Track for shutdown
+	s.activeConnsMu.Lock()
+	s.activeConns = append(s.activeConns, c)
+	s.activeConnsMu.Unlock()
+	
 	s.logger.Printf("New connection from %s", c.RemoteAddr().String())
 	return nil, gnet.None
 }
 
 // OnClose is called when a connection is closed
 func (s *Server) OnClose(c gnet.Conn, err error) gnet.Action {
-	if conn, ok := s.connections.Load(c); ok {
-		if httpConn, ok := conn.(*Connection); ok {
+	if ctx := c.Context(); ctx != nil {
+		if httpConn, ok := ctx.(*Connection); ok {
 			_ = httpConn.Close()
 		}
-		s.connections.Delete(c)
 	}
+
+	// Remove from active connections list
+	s.activeConnsMu.Lock()
+	for i, conn := range s.activeConns {
+		if conn == c {
+			// Swap with last element and truncate
+			s.activeConns[i] = s.activeConns[len(s.activeConns)-1]
+			s.activeConns = s.activeConns[:len(s.activeConns)-1]
+			break
+		}
+	}
+	s.activeConnsMu.Unlock()
 
 	if err != nil {
 		s.logger.Printf("Connection closed with error: %v", err)
@@ -179,13 +200,17 @@ func (s *Server) OnClose(c gnet.Conn, err error) gnet.Action {
 
 // OnTraffic is called when data is received on a connection
 func (s *Server) OnTraffic(c gnet.Conn) gnet.Action {
-	connValue, ok := s.connections.Load(c)
-	if !ok {
-		s.logger.Printf("Connection not found in map")
+	ctx := c.Context()
+	if ctx == nil {
+		s.logger.Printf("Connection context not found")
 		return gnet.Close
 	}
 
-	conn := connValue.(*Connection)
+	conn, ok := ctx.(*Connection)
+	if !ok {
+		s.logger.Printf("Invalid connection context type")
+		return gnet.Close
+	}
 
 	// Read all available data
 	buf, err := c.Next(-1)
@@ -1448,8 +1473,13 @@ func (c *Connection) IsStreamClosed(streamID uint32) bool {
 	return closed
 }
 
-// StoreConnection stores a connection in the server's connections map.
+// StoreConnection is kept for compatibility but now uses Conn.Context().
 // This is used by the multiplexer to register connections.
 func (s *Server) StoreConnection(c gnet.Conn, conn *Connection) {
-	s.connections.Store(c, conn)
+	c.SetContext(conn)
+	
+	// Also track for shutdown
+	s.activeConnsMu.Lock()
+	s.activeConns = append(s.activeConns, c)
+	s.activeConnsMu.Unlock()
 }
