@@ -2,6 +2,6 @@
 
 | Framework | Scenario | MaxClients | MaxRPS | P95(ms) | TimeToDegrade(s) |
 |-----------|----------|------------|--------|---------|------------------|
-| celeris | simple | 480 | 75031 | 7.40 | 30.0 |
-| celeris | json | 558 | 74318 | 8.42 | 30.0 |
-| celeris | params | 480 | 77662 | 7.17 | 30.0 |
+| celeris | simple | 280 | 77701 | 3.36 | 30.0 |
+| celeris | json | 560 | 79195 | 9.65 | 30.0 |
+| celeris | params | 554 | 75434 | 8.58 | 22.0 |

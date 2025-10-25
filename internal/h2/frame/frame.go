@@ -277,6 +277,7 @@ func (w *Writer) WritePushPromise(streamID uint32, promiseID uint32, endHeaders 
 
 // HeaderEncoder encodes HTTP headers using HPACK
 type HeaderEncoder struct {
+    mu      sync.Mutex
 	encoder *hpack.Encoder
 	buf     *bytes.Buffer
 }
@@ -303,40 +304,46 @@ func NewHeaderEncoder() *HeaderEncoder {
 
 // Encode encodes headers to HPACK format
 func (e *HeaderEncoder) Encode(headers [][2]string) ([]byte, error) {
-	e.buf.Reset()
-	for _, h := range headers {
-		if err := e.encoder.WriteField(hpack.HeaderField{Name: h[0], Value: h[1]}); err != nil {
-			return nil, err
-		}
-	}
-	// Return a copy to avoid the buffer being reused while data is still being written
-	result := make([]byte, e.buf.Len())
-	copy(result, e.buf.Bytes())
-	return result, nil
+    e.mu.Lock()
+    defer e.mu.Unlock()
+    e.buf.Reset()
+    for _, h := range headers {
+        if err := e.encoder.WriteField(hpack.HeaderField{Name: h[0], Value: h[1]}); err != nil {
+            return nil, err
+        }
+    }
+    // Return a copy to avoid the buffer being reused while data is still being written
+    result := make([]byte, e.buf.Len())
+    copy(result, e.buf.Bytes())
+    return result, nil
 }
 
 // EncodeBorrow encodes headers and returns a byte slice backed by the encoder's
 // internal buffer. The returned slice is only valid until the next call to
 // Encode/EncodeBorrow or Close. Callers must ensure exclusive access.
 func (e *HeaderEncoder) EncodeBorrow(headers [][2]string) ([]byte, error) {
-	e.buf.Reset()
-	for _, h := range headers {
-		if err := e.encoder.WriteField(hpack.HeaderField{Name: h[0], Value: h[1]}); err != nil {
-			return nil, err
-		}
-	}
-	return e.buf.Bytes(), nil
+    e.mu.Lock()
+    defer e.mu.Unlock()
+    e.buf.Reset()
+    for _, h := range headers {
+        if err := e.encoder.WriteField(hpack.HeaderField{Name: h[0], Value: h[1]}); err != nil {
+            return nil, err
+        }
+    }
+    return e.buf.Bytes(), nil
 }
 
 // Close releases internal resources back to the pool. The encoder instance should
 // not be used after Close.
 func (e *HeaderEncoder) Close() {
-	if e.buf != nil {
-		e.buf.Reset()
-		headerBufPool.Put(e.buf)
-		e.buf = nil
-		e.encoder = hpack.NewEncoder(new(bytes.Buffer)) // detach writer defensively
-	}
+    e.mu.Lock()
+    defer e.mu.Unlock()
+    if e.buf != nil {
+        e.buf.Reset()
+        headerBufPool.Put(e.buf)
+        e.buf = nil
+        e.encoder = hpack.NewEncoder(new(bytes.Buffer)) // detach writer defensively
+    }
 }
 
 // HeaderDecoder decodes HTTP headers using HPACK

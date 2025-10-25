@@ -1116,19 +1116,20 @@ func (c *Connection) WriteResponse(streamID uint32, status int, headers [][2]str
 		return nil
 	}
 
-	// LOCK for encoding + writing (encoder is NOT thread-safe)
-	c.writeMu.Lock()
-	defer c.writeMu.Unlock()
-
-	// Encode headers under lock
-	headerBlock, err := c.headerEncoder.EncodeBorrow(allHeaders)
-	// return the pooled slice
+    // Encode headers outside connection write lock to reduce contention.
+    // Use Encode (copy) so the returned slice remains valid after lock acquisition.
+    headerBlock, err := c.headerEncoder.Encode(allHeaders)
+    // return the pooled slice
 	*pooled = allHeaders[:0]
 	headersSlicePool.Put(pooled)
 	if err != nil {
 		c.logger.Printf("ERROR encoding headers: %v", err)
 		return fmt.Errorf("failed to encode headers: %w", err)
 	}
+
+    // Acquire lock only for writing HEADERS/DATA and updating stream state
+    c.writeMu.Lock()
+    defer c.writeMu.Unlock()
 
 	// Write HEADERS (and CONTINUATION) respecting peer MAX_FRAME_SIZE
 	// If no body is present, we can end the stream with HEADERS (END_STREAM) to avoid zero-length DATA later
@@ -1197,50 +1198,21 @@ type connWriter struct {
 	conn     gnet.Conn
 	mu       *sync.Mutex
 	logger   *log.Logger
-	pending  [][]byte
+    // pending holds individual frame slices ready to send via AsyncWritev.
+    // Each element must be a full HTTP/2 frame (header+payload) slice referencing
+    // a stable backing array.
+    pending  [][]byte
 	inflight bool
-	queued   [][]byte
+    // queued holds additional frames to send after inflight batch completes.
+    queued   [][]byte
 	parent   *Connection
 }
 
 // filterFrames removes frames targeting streams that have been closed/reset.
-func (w *connWriter) filterFrames(part []byte) []byte {
-	if len(part) < 9 {
-		return nil
-	}
-	off := 0
-	keepBuf := make([]byte, 0, len(part))
-	for len(part)-off >= 9 {
-		length := int(uint32(part[off])<<16 | uint32(part[off+1])<<8 | uint32(part[off+2]))
-		if length < 0 || off+9+length > len(part) {
-			break
-		}
-		ftype := http2.FrameType(part[off+3])
-		sid := binary.BigEndian.Uint32(part[off+5:off+9]) & 0x7fffffff
-		keep := true
-		if sid != 0 && w.parent != nil {
-			// Never drop RST_STREAM frames; peers must observe them even for closed streams
-			if ftype != http2.FrameRSTStream {
-				if s, ok := w.parent.processor.GetManager().GetStream(sid); ok && s.ClosedByReset {
-					keep = false
-				}
-				if keep && w.parent.IsStreamClosed(sid) {
-					keep = false
-				}
-			}
-		}
-		if keep {
-			keepBuf = append(keepBuf, part[off:off+9+length]...)
-		}
-		off += 9 + length
-	}
-	if len(keepBuf) == 0 {
-		return nil
-	}
-	out := make([]byte, len(keepBuf))
-	copy(out, keepBuf)
-	return out
-}
+// filterFrames is retained for documentation/reference; use inline filtering in Flush.
+// Deprecated: kept to avoid re-adding in future refactors.
+//lint:ignore U1000 retained for future reference
+func (w *connWriter) filterFrames(_ []byte) []byte { return nil }
 
 // bufferReader adapts Connection's buffer to an io.Reader that drains as frames are read by http2.Framer.
 // http2.Framer reads directly from this reader; we implement Read by draining from c.buffer.
@@ -1265,136 +1237,129 @@ func (w *connWriter) Write(p []byte) (n int, err error) {
 		w.logger.Printf("Writing %d bytes to connection", len(p))
 	}
 
-	// Parse frames in p and filter out any frames for streams reset/closed by peer
-	off := 0
-	// Pre-size filtered with original length; we'll shrink if we drop frames
-	filtered := make([]byte, 0, len(p))
+    // Copy the entire buffer once to ensure lifetime across async sends
+    if len(p) == 0 {
+        return 0, nil
+    }
+    data := make([]byte, len(p))
+    copy(data, p)
 
-	for len(p)-off >= 9 {
-		length := int(uint32(p[off])<<16 | uint32(p[off+1])<<8 | uint32(p[off+2]))
-		ftype := http2.FrameType(p[off+3])
-		flags := http2.Flags(p[off+4])
-		sid := binary.BigEndian.Uint32(p[off+5:off+9]) & 0x7fffffff
-		consume := 9 + length
-		if consume <= 0 || off+consume > len(p) {
-			// Malformed batch; stop parsing and drop the rest for safety
-			break
-		}
-		// Decide whether to keep this frame
-		keep := true
-		if sid != 0 && w.parent != nil {
-			// Never drop RST_STREAM frames; peers must observe them even for closed streams
-			if ftype != http2.FrameRSTStream {
-				// Drop frames for streams reset/closed by peer
-				if s, ok := w.parent.processor.GetManager().GetStream(sid); ok && s.ClosedByReset {
-					keep = false
-				}
-				// Also drop if connection marked stream closed explicitly
-				if keep && w.parent.IsStreamClosed(sid) {
-					keep = false
-				}
-			}
-		}
+    // Parse frames and queue kept segments referencing the stable backing array
+    off := 0
+    var segments [][]byte
+    for len(data)-off >= 9 {
+        length := int(uint32(data[off])<<16 | uint32(data[off+1])<<8 | uint32(data[off+2]))
+        ftype := http2.FrameType(data[off+3])
+        // flags := http2.Flags(data[off+4]) // Only for debug
+        sid := binary.BigEndian.Uint32(data[off+5:off+9]) & 0x7fffffff
+        consume := 9 + length
+        if consume <= 0 || off+consume > len(data) {
+            break
+        }
+        keep := true
+        if sid != 0 && w.parent != nil && ftype != http2.FrameRSTStream {
+            if s, ok := w.parent.processor.GetManager().GetStream(sid); ok && s.ClosedByReset {
+                keep = false
+            }
+            if keep && w.parent.IsStreamClosed(sid) {
+                keep = false
+            }
+        }
+        if keep {
+            segments = append(segments, data[off:off+consume])
+        }
+        off += consume
+    }
 
-		if verboseLogging {
-			w.logger.Printf("[H2][io] batch frame: type=%v flags=0x%x sid=%d len=%d keep=%v", ftype, flags, sid, length, keep)
-		}
-
-		if keep {
-			filtered = append(filtered, p[off:off+consume]...)
-		}
-		off += consume
-	}
-
-	// Serialize writes across all goroutines to preserve frame ordering
-	w.mu.Lock()
-	defer w.mu.Unlock()
-
-	if len(filtered) == 0 {
-		// Nothing to send after filtering
-		return len(p), nil
-	}
-	// Make a copy of the filtered data since async send happens after return
-	data := make([]byte, len(filtered))
-	copy(data, filtered)
-	w.pending = append(w.pending, data)
-	return len(p), nil
+    // Serialize appending pending segments
+    w.mu.Lock()
+    if len(segments) > 0 {
+        w.pending = append(w.pending, segments...)
+    }
+    w.mu.Unlock()
+    return len(p), nil
 }
 
 // Flush ensures data is sent by calling gnet's Flush
 func (w *connWriter) Flush() error {
-	//nolint:gocyclo // High complexity from batching and filtering; kept for performance
-	w.mu.Lock()
-	if w.inflight {
-		// Queue additional data to be sent after current inflight completes
-		if len(w.pending) > 0 {
-			w.queued = append(w.queued, w.pending...)
-			w.pending = nil
-		}
-		w.mu.Unlock()
-		return nil
-	}
-	batch := w.pending
-	w.pending = nil
-	if len(batch) == 0 {
-		w.mu.Unlock()
-		_ = w.conn.Wake(nil)
-		return nil
-	}
-	// Filter out frames for streams reset/closed by peer
-	filteredParts := make([][]byte, 0, len(batch))
-	for _, part := range batch {
-		if out := w.filterFrames(part); len(out) > 0 {
-			filteredParts = append(filteredParts, out)
-		}
-	}
-	if len(filteredParts) == 0 {
-		w.mu.Unlock()
-		_ = w.conn.Wake(nil)
-		return nil
-	}
-	w.inflight = true
-	w.mu.Unlock()
+    w.mu.Lock()
+    if w.inflight {
+        if len(w.pending) > 0 {
+            w.queued = append(w.queued, w.pending...)
+            w.pending = nil
+        }
+        w.mu.Unlock()
+        return nil
+    }
+    batch := w.pending
+    w.pending = nil
+    if len(batch) == 0 {
+        w.mu.Unlock()
+        _ = w.conn.Wake(nil)
+        return nil
+    }
+    // Inline filter without extra copies
+    filtered := w.filterPartsNoCopy(batch)
+    if len(filtered) == 0 {
+        w.mu.Unlock()
+        _ = w.conn.Wake(nil)
+        return nil
+    }
+    w.inflight = true
+    w.mu.Unlock()
+    return w.asyncSend(filtered)
+}
 
-	// Use vectorized async write to minimize syscalls
-	return w.conn.AsyncWritev(filteredParts, func(_ gnet.Conn, err error) error {
-		if verboseLogging && err != nil {
-			w.logger.Printf("AsyncWritev callback error: %v", err)
-		}
-		// On completion, check if there is queued data, and send it next
-		w.mu.Lock()
-		next := w.queued
-		if len(next) > 0 {
-			w.queued = nil
-			w.inflight = true
-			w.mu.Unlock()
-			// Filter queued parts as well
-			filteredQueued := make([][]byte, 0, len(next))
-			for _, part := range next {
-				if out := w.filterFrames(part); len(out) > 0 {
-					filteredQueued = append(filteredQueued, out)
-				}
-			}
-			if len(filteredQueued) == 0 {
-				w.mu.Lock()
-				w.inflight = false
-				w.mu.Unlock()
-				return nil
-			}
-			return w.conn.AsyncWritev(filteredQueued, func(_ gnet.Conn, err error) error {
-				if verboseLogging && err != nil {
-					w.logger.Printf("AsyncWritev callback error: %v", err)
-				}
-				w.mu.Lock()
-				w.inflight = false
-				w.mu.Unlock()
-				return nil
-			})
-		}
-		w.inflight = false
-		w.mu.Unlock()
-		return nil
-	})
+// filterPartsNoCopy filters parts against closed/reset streams without copying.
+func (w *connWriter) filterPartsNoCopy(parts [][]byte) [][]byte {
+    out := make([][]byte, 0, len(parts))
+    for _, part := range parts {
+        if len(part) < 9 {
+            continue
+        }
+        sid := binary.BigEndian.Uint32(part[5:9]) & 0x7fffffff
+        ftype := http2.FrameType(part[3])
+        keep := true
+        if sid != 0 && w.parent != nil && ftype != http2.FrameRSTStream {
+            if s, ok := w.parent.processor.GetManager().GetStream(sid); ok && s.ClosedByReset {
+                keep = false
+            }
+            if keep && w.parent.IsStreamClosed(sid) {
+                keep = false
+            }
+        }
+        if keep {
+            out = append(out, part)
+        }
+    }
+    return out
+}
+
+// asyncSend sends parts via AsyncWritev and drains queued parts recursively.
+func (w *connWriter) asyncSend(parts [][]byte) error {
+    return w.conn.AsyncWritev(parts, func(_ gnet.Conn, err error) error {
+        if verboseLogging && err != nil {
+            w.logger.Printf("AsyncWritev callback error: %v", err)
+        }
+        w.mu.Lock()
+        next := w.queued
+        if len(next) > 0 {
+            w.queued = nil
+            // Filter queued parts just-in-time
+            filtered := w.filterPartsNoCopy(next)
+            if len(filtered) == 0 {
+                w.inflight = false
+                w.mu.Unlock()
+                return nil
+            }
+            w.inflight = true
+            w.mu.Unlock()
+            return w.asyncSend(filtered)
+        }
+        w.inflight = false
+        w.mu.Unlock()
+        return nil
+    })
 }
 
 // SendGoAway sends a GOAWAY frame and marks that we've sent it
