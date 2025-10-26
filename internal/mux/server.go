@@ -116,6 +116,8 @@ func (s *Server) Start() error {
 	options := []gnet.Option{
 		gnet.WithMulticore(s.multicore),
 		gnet.WithReusePort(s.reusePort),
+		// Prefer low-latency writes for small responses
+		gnet.WithTCPNoDelay(gnet.TCPNoDelay),
 	}
 
 	if s.numEventLoop > 0 {

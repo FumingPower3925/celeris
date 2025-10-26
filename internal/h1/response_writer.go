@@ -67,7 +67,9 @@ func (w *ResponseWriter) WriteResponse(status int, headers [][2]string, body []b
 
 		// Estimate final size to minimize reallocations
 		// Status line: ~ 17-40 bytes, CRLF: 2, connection header ~ (len + value)
-		expected := 32 + 2 + 2 + len(body)
+		const smallBodyMax = 16 * 1024
+		wantCoalesceBody := len(body) > 0 && len(body) <= smallBodyMax
+		expected := 32 + 2 + 2
 		// Headers length + CRLF per header
 		for _, h := range headers {
 			expected += len(h[0]) + 2 + len(h[1]) + 2
@@ -75,6 +77,10 @@ func (w *ResponseWriter) WriteResponse(status int, headers [][2]string, body []b
 		// Content-Length header if we add it (~20)
 		if len(body) > 0 {
 			expected += 20
+		}
+		// If we plan to coalesce small body, reserve capacity for it
+		if wantCoalesceBody {
+			expected += len(body)
 		}
 		// Ensure capacity
 		if cap(buf) < expected {
@@ -128,10 +134,18 @@ func (w *ResponseWriter) WriteResponse(status int, headers [][2]string, body []b
 		// End of headers
 		buf = append(buf, crlf...)
 
-		// Queue header buffer and body as separate iovecs to avoid copying body
-		w.pending = append(w.pending, buf)
+		// Prefer zero-copy body as separate iovec, but coalesce small bodies into header buffer when it fits
 		if len(body) > 0 {
-			w.pending = append(w.pending, body)
+			// If small body and capacity allows, append to header buffer to reduce iovec count
+			if wantCoalesceBody && cap(buf)-len(buf) >= len(body) {
+				buf = append(buf, body...)
+				w.pending = append(w.pending, buf)
+			} else {
+				w.pending = append(w.pending, buf)
+				w.pending = append(w.pending, body)
+			}
+		} else {
+			w.pending = append(w.pending, buf)
 		}
 		// Track pooled header buffer for release after write completes
 		if pooledPtr != nil {
@@ -218,9 +232,50 @@ func (w *ResponseWriter) flush() error {
 
 	w.inflight = true
 
-	// Use vectorized async write to minimize syscalls
 	// Capture releases for this batch in closure
 	relThis := rel
+	// If only one buffer, use AsyncWrite for a slightly cheaper path
+	if len(batch) == 1 {
+		b := batch[0]
+		return w.conn.AsyncWrite(b, func(_ gnet.Conn, err error) error {
+			if err != nil && w.logger != nil {
+				w.logger.Printf("AsyncWrite callback error: %v", err)
+			}
+			// Release pooled buffers used in this batch
+			for _, p := range relThis {
+				if p != nil {
+					*p = (*p)[:0]
+					responseBufferPool.Put(p)
+				}
+			}
+			// Check queued data
+			next := w.queued
+			nextRel := w.queuedReleases
+			if len(next) > 0 {
+				w.queued = nil
+				w.queuedReleases = nil
+				w.inflight = true
+				relNext := nextRel
+				return w.conn.AsyncWritev(next, func(_ gnet.Conn, err error) error {
+					if err != nil && w.logger != nil {
+						w.logger.Printf("AsyncWritev callback error: %v", err)
+					}
+					for _, p := range relNext {
+						if p != nil {
+							*p = (*p)[:0]
+							responseBufferPool.Put(p)
+						}
+					}
+					w.inflight = false
+					return nil
+				})
+			}
+			w.inflight = false
+			return nil
+		})
+	}
+
+	// Vectorized async write to minimize syscalls for multiple buffers
 	return w.conn.AsyncWritev(batch, func(_ gnet.Conn, err error) error {
 		if err != nil && w.logger != nil {
 			w.logger.Printf("AsyncWritev callback error: %v", err)
