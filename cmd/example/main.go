@@ -2,9 +2,11 @@
 package main
 
 import (
+	"io"
 	"log"
 	"os"
 	"os/signal"
+	"runtime"
 	"syscall"
 
 	"github.com/albertbausili/celeris/pkg/celeris"
@@ -14,17 +16,25 @@ func main() {
 	// Create router
 	router := celeris.NewRouter()
 
-	// Global middleware
-	router.Use(
-		celeris.Recovery(),
-		celeris.Logger(),
-	)
+	// Optional minimal mode (no middleware/logging) for benchmarking
+	minimal := os.Getenv("EXAMPLE_MINIMAL") == "1"
+	if !minimal {
+		// Global middleware
+		router.Use(
+			celeris.Recovery(),
+			celeris.Logger(),
+		)
+	}
 
 	// Routes
 	router.GET("/", homeHandler)
 	router.GET("/hello/:name", helloHandler)
 	router.POST("/api/data", dataHandler)
 	router.GET("/json", jsonHandler)
+	// Params route mirroring benchmark
+	router.GET("/user/:userId/post/:postId", paramsHandler)
+	// Single param route for wrk quick test
+	router.GET("/user/:id", userParamHandler)
 
 	// API group
 	api := router.Group("/api/v1")
@@ -34,7 +44,25 @@ func main() {
 
 	// Create server
 	config := celeris.DefaultConfig()
-	config.Addr = ":8080"
+	addr := os.Getenv("EXAMPLE_ADDR")
+	if addr == "" {
+		addr = ":8080"
+	}
+	config.Addr = addr
+	if minimal {
+		// Silence logs and tune loops for max throughput
+		config.Logger = log.New(io.Discard, "", 0)
+		cpus := runtime.GOMAXPROCS(0)
+		if cpus <= 2 {
+			config.NumEventLoop = cpus
+		} else if cpus <= 8 {
+			config.NumEventLoop = cpus - 1
+		} else {
+			config.NumEventLoop = cpus - 2
+		}
+		config.Multicore = true
+		config.ReusePort = true
+	}
 	config.Multicore = true
 
 	server := celeris.New(config)
@@ -117,6 +145,21 @@ func jsonHandler(ctx *celeris.Context) error {
 		"server":  "celeris",
 		"version": "0.1.0",
 		"status":  "running",
+	})
+}
+
+// paramsHandler returns params JSON
+func paramsHandler(ctx *celeris.Context) error {
+	return ctx.JSON(200, map[string]string{
+		"userId": celeris.Param(ctx, "userId"),
+		"postId": celeris.Param(ctx, "postId"),
+	})
+}
+
+// userParamHandler returns single id
+func userParamHandler(ctx *celeris.Context) error {
+	return ctx.JSON(200, map[string]string{
+		"id": celeris.Param(ctx, "id"),
 	})
 }
 

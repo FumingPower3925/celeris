@@ -173,3 +173,34 @@ help:
 	@echo "  make clean             - Clean build artifacts"
 	@echo "  make help              - Display this help message"
 
+# WRK-based HTTP/1.1 benchmarks (requires wrk installed)
+WRK_THREADS ?= 8
+WRK_CONNECTIONS ?= 400
+WRK_DURATION ?= 30s
+
+wrk-h1-celeris:
+	@PORT=$$(python3 -c 'import socket; s=socket.socket(); s.bind(("",0)); print(s.getsockname()[1]); s.close()'); \
+	echo "Starting Celeris H1 server on :$${PORT}..."; \
+	EXAMPLE_ADDR=:$$PORT go run -tags "poll_opt gc_opt" ./cmd/example > .server.log 2>&1 & echo $$! > .server.pid; \
+	sleep 1; \
+	echo "Running wrk simple (/) on :$${PORT}..."; \
+	wrk --latency -t$(WRK_THREADS) -c$(WRK_CONNECTIONS) -d$(WRK_DURATION) http://127.0.0.1:$$PORT/ || true; \
+	echo "Running wrk json (/json) on :$${PORT}..."; \
+	wrk --latency -t$(WRK_THREADS) -c$(WRK_CONNECTIONS) -d$(WRK_DURATION) http://127.0.0.1:$$PORT/json || true; \
+	echo "Running wrk params (/user/123/post/456) on :$${PORT}..."; \
+	wrk --latency -t$(WRK_THREADS) -c$(WRK_CONNECTIONS) -d$(WRK_DURATION) http://127.0.0.1:$$PORT/user/123/post/456 || true; \
+	if [ -f .server.pid ]; then kill `cat .server.pid` 2>/dev/null || true; rm -f .server.pid; fi
+
+wrk-h1-celeris-max:
+	@PORT=$$(python3 -c 'import socket; s=socket.socket(); s.bind(("",0)); print(s.getsockname()[1]); s.close()'); \
+	echo "Starting Celeris H1 server (minimal) on :$${PORT}..."; \
+	EXAMPLE_MINIMAL=1 EXAMPLE_ADDR=:$$PORT go run -tags "poll_opt gc_opt" ./cmd/example > .server.log 2>&1 & echo $$! > .server.pid; \
+	sleep 1; \
+	echo "Running wrk max (/)..."; \
+	wrk --latency -t12 -c800 -d$(WRK_DURATION) http://127.0.0.1:$$PORT/ || true; \
+	echo "Running wrk max (/json)..."; \
+	wrk --latency -t12 -c800 -d$(WRK_DURATION) http://127.0.0.1:$$PORT/json || true; \
+	echo "Running wrk max (/user/123/post/456)..."; \
+	wrk --latency -t12 -c800 -d$(WRK_DURATION) http://127.0.0.1:$$PORT/user/123/post/456 || true; \
+	if [ -f .server.pid ]; then kill `cat .server.pid` 2>/dev/null || true; rm -f .server.pid; fi
+
