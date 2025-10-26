@@ -260,6 +260,14 @@ func (r *Router) FindRoute(method, path string) (Handler, map[string]string) {
 		path = path[:q]
 	}
 
+	// Super-fast static path checks for hot paths
+	if path == "/" && root.handler != nil {
+		return root.handler, nil
+	}
+	if child, ok := root.children["json"]; ok && path == "/json" && child.handler != nil {
+		return child.handler, nil
+	}
+
 	if path == "/" {
 		if root.handler != nil {
 			return root.handler, nil

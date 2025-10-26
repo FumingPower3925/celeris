@@ -8,6 +8,9 @@ import (
 	"github.com/panjf2000/gnet/v2"
 )
 
+// verboseLogging controls per-connection log verbosity for HTTP/1.1
+const verboseLogging = false
+
 // Server implements gnet.EventHandler for HTTP/1.1.
 type Server struct {
 	handler stream.Handler
@@ -32,7 +35,9 @@ func NewServer(ctx context.Context, handler stream.Handler, logger *log.Logger) 
 func (s *Server) OnOpen(c gnet.Conn) ([]byte, gnet.Action) {
 	conn := NewConnection(s.ctx, c, s.handler, s.logger)
 	c.SetContext(conn) // Use gnet.Conn.Context() for per-connection storage (best practice)
-	s.logger.Printf("HTTP/1.1 connection from %s", c.RemoteAddr().String())
+	if verboseLogging {
+		s.logger.Printf("HTTP/1.1 connection from %s", c.RemoteAddr().String())
+	}
 	return nil, gnet.None
 }
 
@@ -44,10 +49,12 @@ func (s *Server) OnClose(c gnet.Conn, err error) gnet.Action {
 		}
 	}
 
-	if err != nil {
-		s.logger.Printf("HTTP/1.1 connection closed with error: %v", err)
-	} else {
-		s.logger.Printf("HTTP/1.1 connection closed from %s", c.RemoteAddr().String())
+	if verboseLogging {
+		if err != nil {
+			s.logger.Printf("HTTP/1.1 connection closed with error: %v", err)
+		} else {
+			s.logger.Printf("HTTP/1.1 connection closed from %s", c.RemoteAddr().String())
+		}
 	}
 
 	return gnet.None

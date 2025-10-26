@@ -11,7 +11,9 @@ import (
 	"math"
 	"net"
 	"net/http"
+	_ "net/http/pprof"
 	"os"
+	"runtime"
 	"runtime/pprof"
 	"sort"
 	"strconv"
@@ -68,6 +70,10 @@ const (
 )
 
 func main() {
+	// Optional: start server-side pprof endpoint for the benchmark process
+	if os.Getenv("BENCH_SERVER_PPROF") == "1" {
+		go func() { _ = http.ListenAndServe("127.0.0.1:6060", nil) }()
+	}
 	// Check for FRAMEWORK environment variable to filter frameworks
 	selectedFramework := os.Getenv("FRAMEWORK")
 
@@ -413,6 +419,17 @@ func startCelerisHTTP1(addr, scenario string) *ServerHandle {
 	config.EnableH2 = false
 	// Silence server logs for clean benchmark output
 	config.Logger = log.New(io.Discard, "", 0)
+	// Explicit gnet tuning
+	cpus := runtime.GOMAXPROCS(0)
+	if cpus <= 2 {
+		config.NumEventLoop = cpus
+	} else if cpus <= 8 {
+		config.NumEventLoop = cpus - 1
+	} else {
+		config.NumEventLoop = cpus - 2
+	}
+	config.Multicore = true
+	config.ReusePort = true
 
 	server := celeris.New(config)
 

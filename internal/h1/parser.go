@@ -23,6 +23,32 @@ type Request struct {
 	BodyRead        int64
 }
 
+// Reset clears the request fields for reuse.
+func (r *Request) Reset() {
+	r.Method = ""
+	r.Path = ""
+	r.Version = ""
+	r.Headers = r.Headers[:0]
+	r.Host = ""
+	r.ContentLength = 0
+	r.ChunkedEncoding = false
+	r.KeepAlive = false
+	r.HeadersComplete = false
+	r.BodyRead = 0
+}
+
+var (
+	bGET    = []byte("GET")
+	bHTTP11 = []byte("HTTP/1.1")
+	bRoot   = []byte("/")
+	bJSON   = []byte("/json")
+
+	sGET    = "GET"
+	sHTTP11 = "HTTP/1.1"
+	sRoot   = "/"
+	sJSON   = "/json"
+)
+
 // Parser provides zero-copy HTTP/1.1 request parsing.
 type Parser struct {
 	buf []byte
@@ -63,9 +89,24 @@ func (p *Parser) ParseRequest(req *Request) (int, error) {
 		return 0, fmt.Errorf("invalid request line")
 	}
 
-	req.Method = string(parts[0])
-	req.Path = string(parts[1])
-	req.Version = string(parts[2])
+	// Intern common method/path/version to avoid allocations
+	if bytes.Equal(parts[0], bGET) {
+		req.Method = sGET
+	} else {
+		req.Method = string(parts[0])
+	}
+	if bytes.Equal(parts[1], bRoot) {
+		req.Path = sRoot
+	} else if bytes.Equal(parts[1], bJSON) {
+		req.Path = sJSON
+	} else {
+		req.Path = string(parts[1])
+	}
+	if bytes.Equal(parts[2], bHTTP11) {
+		req.Version = sHTTP11
+	} else {
+		req.Version = string(parts[2])
+	}
 
 	// Validate HTTP version
 	if req.Version != "HTTP/1.1" && req.Version != "HTTP/1.0" {

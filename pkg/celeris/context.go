@@ -247,12 +247,8 @@ func (c *Context) String(status int, format string, values ...interface{}) error
 	c.responseHeaders.Set("content-type", "text/plain; charset=utf-8")
 	s := fmt.Sprintf(format, values...)
 	c.responseHeaders.Set("content-length", strconv.Itoa(len(s)))
-	_, err := c.responseBody.WriteString(s)
 	c.writeMu.Unlock()
-	if err != nil {
-		return err
-	}
-	return c.flush()
+	return c.flushWithBody([]byte(s))
 }
 
 // HTML sends an HTML response with the given status code.
@@ -261,12 +257,8 @@ func (c *Context) HTML(status int, html string) error {
 	c.statusCode = status
 	c.responseHeaders.Set("content-type", "text/html; charset=utf-8")
 	c.responseHeaders.Set("content-length", strconv.Itoa(len(html)))
-	_, err := c.responseBody.WriteString(html)
 	c.writeMu.Unlock()
-	if err != nil {
-		return err
-	}
-	return c.flush()
+	return c.flushWithBody([]byte(html))
 }
 
 // Data sends a response with custom content type and data.
@@ -275,12 +267,18 @@ func (c *Context) Data(status int, contentType string, data []byte) error {
 	c.statusCode = status
 	c.responseHeaders.Set("content-type", contentType)
 	c.responseHeaders.Set("content-length", strconv.Itoa(len(data)))
-	_, err := c.responseBody.Write(data)
 	c.writeMu.Unlock()
-	if err != nil {
-		return err
-	}
-	return c.flush()
+	return c.flushWithBody(data)
+}
+
+// Plain sends a plain text response without fmt formatting overhead.
+func (c *Context) Plain(status int, s string) error {
+	c.writeMu.Lock()
+	c.statusCode = status
+	c.responseHeaders.Set("content-type", "text/plain; charset=utf-8")
+	c.responseHeaders.Set("content-length", strconv.Itoa(len(s)))
+	c.writeMu.Unlock()
+	return c.flushWithBody([]byte(s))
 }
 
 // NoContent sends a response with no body content.
@@ -304,6 +302,23 @@ func (c *Context) flush() error {
 		return fmt.Errorf("no write response function")
 	}
 	err := c.writeResponse(c.StreamID, c.statusCode, c.responseHeaders.All(), c.responseBody.Bytes())
+	c.responseBody.Reset()
+	c.hasFlushed = true
+	if c.values != nil {
+		for k := range c.values {
+			delete(c.values, k)
+		}
+		c.values = nil
+	}
+	return err
+}
+
+// flushWithBody writes the provided body directly, avoiding copying into responseBody.
+func (c *Context) flushWithBody(body []byte) error {
+	if c.writeResponse == nil {
+		return fmt.Errorf("no write response function")
+	}
+	err := c.writeResponse(c.StreamID, c.statusCode, c.responseHeaders.All(), body)
 	c.responseBody.Reset()
 	c.hasFlushed = true
 	if c.values != nil {

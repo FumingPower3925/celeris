@@ -20,6 +20,7 @@ type Connection struct {
 	buffer  *bytes.Buffer
 	logger  *log.Logger
 	ctx     context.Context
+	req     Request
 }
 
 // NewConnection creates a new HTTP/1.1 connection.
@@ -37,15 +38,68 @@ func NewConnection(ctx context.Context, c gnet.Conn, handler stream.Handler, log
 
 // HandleData processes incoming HTTP/1.1 data.
 func (c *Connection) HandleData(data []byte) error {
-	// Append data to buffer
-	c.buffer.Write(data)
+	// Fast-path: if there is no pending leftover, parse directly from incoming buffer to avoid copy
+	if c.buffer.Len() == 0 {
+		// Support multiple pipelined requests in the same incoming buffer
+		offset := 0
+		for offset < len(data) {
+			c.parser.Reset(data[offset:])
+			c.req.Reset()
+			req := &c.req
+			consumed, err := c.parser.ParseRequest(req)
+			if err != nil {
+				c.logger.Printf("Parse error: %v", err)
+				return c.sendError(400, "Bad Request")
+			}
 
-	// Try to parse and process requests
+			if consumed == 0 {
+				// Incomplete headers, copy the remainder for next OnTraffic
+				c.buffer.Write(data[offset:])
+				return nil
+			}
+
+			// Determine if a body is required; if so, fall back to buffered path
+			bodyNeeded := int64(0)
+			if req.ChunkedEncoding {
+				bodyNeeded = -1
+			} else if req.ContentLength > 0 {
+				bodyNeeded = req.ContentLength
+			}
+
+			if bodyNeeded > 0 || bodyNeeded == -1 {
+				// Copy the remainder (including already parsed headers) to buffer and use standard path
+				c.buffer.Write(data[offset:])
+				break
+			}
+
+			// No body: handle request directly without touching the buffer
+			s := c.requestToStream(req, nil)
+			c.writer.Reset(req.KeepAlive)
+			if err := c.handler.HandleStream(c.ctx, s); err != nil {
+				c.logger.Printf("Handler error: %v", err)
+				return c.sendError(500, "Internal Server Error")
+			}
+			if !req.KeepAlive {
+				return fmt.Errorf("connection close requested")
+			}
+
+			// Advance to parse any subsequent pipelined request
+			offset += consumed
+			if offset >= len(data) {
+				return nil
+			}
+		}
+		// If we broke due to body or incomplete header, continue with buffered parse below
+	} else {
+		// There is pending leftover: append and parse from buffer
+		c.buffer.Write(data)
+	}
+
+	// Buffered path: parse from accumulated buffer
 	for c.buffer.Len() > 0 {
-		// Reset parser with current buffer
 		c.parser.Reset(c.buffer.Bytes())
-
-		req := &Request{}
+		c.req.Reset()
+		req := &c.req
 		consumed, err := c.parser.ParseRequest(req)
 		if err != nil {
 			c.logger.Printf("Parse error: %v", err)
@@ -57,7 +111,6 @@ func (c *Connection) HandleData(data []byte) error {
 			break
 		}
 
-		// We have a complete request headers, now handle body
 		if err := c.handleRequest(req, consumed); err != nil {
 			return err
 		}

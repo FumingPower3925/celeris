@@ -80,3 +80,6 @@ Thumbs.db
 baseline.json
 
 results.*
+
+test/benchmark/http2/rampup_results.*
+test/benchmark/http1/rampup_results.*
