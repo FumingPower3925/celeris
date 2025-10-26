@@ -53,11 +53,12 @@ func main() {
 		// Silence logs and tune loops for max throughput
 		config.Logger = log.New(io.Discard, "", 0)
 		cpus := runtime.GOMAXPROCS(0)
-		if cpus <= 2 {
+		switch {
+		case cpus <= 2:
 			config.NumEventLoop = cpus
-		} else if cpus <= 8 {
+		case cpus <= 8:
 			config.NumEventLoop = cpus - 1
-		} else {
+		default:
 			config.NumEventLoop = cpus - 2
 		}
 		config.Multicore = true

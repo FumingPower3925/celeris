@@ -378,14 +378,14 @@ func startCelerisHTTP2(sc string) (*ServerHandle, *http.Client) {
 		r.GET("/pushed.txt", func(ctx *celeris.Context) error { return ctx.String(200, "pushed") })
 	case "json":
 		r.GET("/json", func(ctx *celeris.Context) error {
-			return ctx.JSON(200, map[string]any{"status": "ok", "code": 200})
+			return ctx.Data(200, "application/json", []byte("{\"status\":\"ok\",\"code\":200}"))
 		})
 	case "params":
 		r.GET("/users/:userId/posts/:postId", func(ctx *celeris.Context) error {
-			return ctx.JSON(200, map[string]string{
-				"user_id": celeris.Param(ctx, "userId"),
-				"post_id": celeris.Param(ctx, "postId"),
-			})
+			uid := celeris.Param(ctx, "userId")
+			pid := celeris.Param(ctx, "postId")
+			b := []byte("{\"user_id\":\"" + uid + "\",\"post_id\":\"" + pid + "\"}")
+			return ctx.Data(200, "application/json", b)
 		})
 	case "push":
 		// Push multiple small resources and serve them

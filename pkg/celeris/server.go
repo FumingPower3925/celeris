@@ -110,3 +110,19 @@ func (a *streamHandlerAdapter) HandleStream(ctx context.Context, s *stream.Strea
 
 	return a.handler.ServeHTTP2(celerisCtx)
 }
+
+// HandleH1Fast allows the HTTP/1.1 path to invoke the user Handler directly with a pre-built Context,
+// bypassing the HTTP/2 Stream adapter. The provided handler must be the internal streamHandlerAdapter
+// used by the Celeris server; other types will return an error.
+// HandleH1Fast allows the adapter to serve an HTTP/1.1 request directly using a pre-built Context.
+// This avoids constructing an HTTP/2 stream for the H1 path.
+func (a *streamHandlerAdapter) HandleH1Fast(ctx context.Context, method, path, authority string, reqHeaders [][2]string, body []byte, write func(status int, headers [][2]string, body []byte) error) error {
+	var c *Context
+	if len(reqHeaders) == 0 {
+		// Use a lighter H1 context when no headers are inspected
+		c = NewContextH1NoHeaders(ctx, method, path, authority, body, write)
+	} else {
+		c = NewContextH1(ctx, method, path, authority, reqHeaders, body, write)
+	}
+	return a.handler.ServeHTTP2(c)
+}

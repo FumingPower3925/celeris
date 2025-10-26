@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"fmt"
 	"strconv"
+	"strings"
 )
 
 // Request represents a parsed HTTP/1.1 request.
@@ -13,7 +14,11 @@ type Request struct {
 	Path    string
 	Version string
 	Headers [][2]string
-	Host    string
+	// RawHeaders holds zero-copy views (name,value) into the parse buffer.
+	// Names/values are exactly as received on the wire (no lowercasing).
+	// These slices are only valid during request handling while the buffer lives.
+	RawHeaders [][2][]byte
+	Host       string
 	// Body handling
 	ContentLength   int64
 	ChunkedEncoding bool
@@ -29,6 +34,7 @@ func (r *Request) Reset() {
 	r.Path = ""
 	r.Version = ""
 	r.Headers = r.Headers[:0]
+	r.RawHeaders = r.RawHeaders[:0]
 	r.Host = ""
 	r.ContentLength = 0
 	r.ChunkedEncoding = false
@@ -53,6 +59,9 @@ var (
 type Parser struct {
 	buf []byte
 	pos int
+	// noStringHeaders skips building req.Headers strings; only RawHeaders and
+	// special fields (Host, ContentLength, KeepAlive, ChunkedEncoding) are set.
+	noStringHeaders bool
 }
 
 // NewParser creates a new HTTP/1.1 parser.
@@ -73,33 +82,68 @@ func (p *Parser) ParseRequest(req *Request) (int, error) {
 		return 0, fmt.Errorf("buffer exhausted")
 	}
 
-	// Parse request line: METHOD PATH VERSION\r\n
-	lineEnd := bytes.Index(p.buf[p.pos:], []byte("\r\n"))
-	if lineEnd == -1 {
-		// Need more data
+	// Request line
+	complete, err := p.parseRequestLine(req)
+	if err != nil {
+		return 0, err
+	}
+	if !complete {
 		return 0, nil
 	}
 
-	line := p.buf[p.pos : p.pos+lineEnd]
-	p.pos += lineEnd + 2 // Skip \r\n
+	// Pre-allocate/prepare header containers
+	if p.noStringHeaders {
+		req.Headers = req.Headers[:0]
+	} else {
+		if cap(req.Headers) >= 16 {
+			req.Headers = req.Headers[:0]
+		} else {
+			req.Headers = make([][2]string, 0, 16)
+		}
+	}
+	req.ContentLength = -1
+	req.KeepAlive = req.Version == "HTTP/1.1"
 
-	// Split request line into method, path, version
-	parts := bytes.SplitN(line, []byte(" "), 3)
-	if len(parts) != 3 {
-		return 0, fmt.Errorf("invalid request line")
+	// Headers
+	complete, err = p.parseHeaders(req)
+	if err != nil {
+		return 0, err
+	}
+	if !complete {
+		return 0, nil
 	}
 
-	// Intern common method/path/version to avoid allocations
+	if req.Host == "" {
+		return 0, fmt.Errorf("missing Host header")
+	}
+	return p.pos, nil
+}
+
+// parseRequestLine parses METHOD SP PATH SP VERSION CRLF, advancing p.pos.
+// Returns complete=false if more data is needed.
+func (p *Parser) parseRequestLine(req *Request) (bool, error) {
+	lineEnd := bytes.Index(p.buf[p.pos:], []byte("\r\n"))
+	if lineEnd == -1 {
+		return false, nil
+	}
+	line := p.buf[p.pos : p.pos+lineEnd]
+	p.pos += lineEnd + 2
+
+	parts := bytes.SplitN(line, []byte(" "), 3)
+	if len(parts) != 3 {
+		return false, fmt.Errorf("invalid request line")
+	}
 	if bytes.Equal(parts[0], bGET) {
 		req.Method = sGET
 	} else {
 		req.Method = string(parts[0])
 	}
-	if bytes.Equal(parts[1], bRoot) {
+	switch {
+	case bytes.Equal(parts[1], bRoot):
 		req.Path = sRoot
-	} else if bytes.Equal(parts[1], bJSON) {
+	case bytes.Equal(parts[1], bJSON):
 		req.Path = sJSON
-	} else {
+	default:
 		req.Path = string(parts[1])
 	}
 	if bytes.Equal(parts[2], bHTTP11) {
@@ -107,76 +151,214 @@ func (p *Parser) ParseRequest(req *Request) (int, error) {
 	} else {
 		req.Version = string(parts[2])
 	}
-
-	// Validate HTTP version
 	if req.Version != "HTTP/1.1" && req.Version != "HTTP/1.0" {
-		return 0, fmt.Errorf("unsupported HTTP version: %s", req.Version)
+		return false, fmt.Errorf("unsupported HTTP version: %s", req.Version)
 	}
+	return true, nil
+}
 
-	// Parse headers
-	req.Headers = make([][2]string, 0, 16)
-	req.ContentLength = -1
-	req.KeepAlive = req.Version == "HTTP/1.1" // Default keep-alive for HTTP/1.1
-
+// parseHeaders parses headers until CRLF CRLF, advancing p.pos.
+// Returns complete=false if more data is needed.
+func (p *Parser) parseHeaders(req *Request) (bool, error) {
 	for {
-		// Find next line
 		lineEnd := bytes.Index(p.buf[p.pos:], []byte("\r\n"))
 		if lineEnd == -1 {
-			// Need more data
-			return 0, nil
+			return false, nil
 		}
-
 		line := p.buf[p.pos : p.pos+lineEnd]
-		p.pos += lineEnd + 2 // Skip \r\n
-
-		// Empty line signals end of headers
+		p.pos += lineEnd + 2
 		if len(line) == 0 {
 			req.HeadersComplete = true
-			break
+			return true, nil
 		}
-
-		// Parse header: NAME: VALUE
 		colonIdx := bytes.IndexByte(line, ':')
 		if colonIdx == -1 {
-			return 0, fmt.Errorf("invalid header line")
+			return false, fmt.Errorf("invalid header line")
 		}
+		rawName := bytes.TrimSpace(line[:colonIdx])
+		rawValue := bytes.TrimSpace(line[colonIdx+1:])
+		if err := p.appendHeader(req, rawName, rawValue); err != nil {
+			return false, err
+		}
+	}
+}
 
-		name := string(bytes.ToLower(bytes.TrimSpace(line[:colonIdx])))
-		value := string(bytes.TrimSpace(line[colonIdx+1:]))
-
+// appendHeader processes a single header line given raw name and value.
+func (p *Parser) appendHeader(req *Request, rawName, rawValue []byte) error {
+	// Always track raw header view
+	req.RawHeaders = append(req.RawHeaders, [2][]byte{rawName, rawValue})
+	if !p.noStringHeaders {
+		var name string
+		switch {
+		case asciiEqualFold(rawName, "Host"):
+			name = "host"
+		case asciiEqualFold(rawName, "Content-Length"):
+			name = "content-length"
+		case asciiEqualFold(rawName, "Transfer-Encoding"):
+			name = "transfer-encoding"
+		case asciiEqualFold(rawName, "Connection"):
+			name = "connection"
+		default:
+			name = strings.ToLower(string(rawName))
+		}
+		value := string(rawValue)
 		req.Headers = append(req.Headers, [2]string{name, value})
-
-		// Process special headers
 		switch name {
 		case "host":
 			req.Host = value
 		case "content-length":
 			cl, err := strconv.ParseInt(value, 10, 64)
 			if err != nil {
-				return 0, fmt.Errorf("invalid content-length: %w", err)
+				return fmt.Errorf("invalid content-length: %w", err)
 			}
 			req.ContentLength = cl
 		case "transfer-encoding":
-			if value == "chunked" || bytes.Contains([]byte(value), []byte("chunked")) {
+			if asciiContainsFoldString(value, "chunked") {
 				req.ChunkedEncoding = true
-				req.ContentLength = -1 // Chunked overrides Content-Length
+				req.ContentLength = -1
 			}
 		case "connection":
-			lowerValue := bytes.ToLower([]byte(value))
-			if bytes.Contains(lowerValue, []byte("close")) {
+			if asciiContainsFoldString(value, "close") {
 				req.KeepAlive = false
-			} else if bytes.Contains(lowerValue, []byte("keep-alive")) {
+			} else if asciiContainsFoldString(value, "keep-alive") {
 				req.KeepAlive = true
 			}
 		}
+		return nil
 	}
-
-	// Validate required headers
-	if req.Host == "" {
-		return 0, fmt.Errorf("missing Host header")
+	// Zero-alloc mode: set special fields only
+	if asciiEqualFold(rawName, "Host") {
+		req.Host = string(rawValue)
+		return nil
 	}
+	if asciiEqualFold(rawName, "Content-Length") {
+		if cl, ok := parseInt64Bytes(rawValue); ok {
+			req.ContentLength = cl
+		} else {
+			return fmt.Errorf("invalid content-length")
+		}
+		return nil
+	}
+	if asciiEqualFold(rawName, "Transfer-Encoding") {
+		if asciiContainsFoldBytes(rawValue, "chunked") {
+			req.ChunkedEncoding = true
+			req.ContentLength = -1
+		}
+		return nil
+	}
+	if asciiEqualFold(rawName, "Connection") {
+		if asciiContainsFoldBytes(rawValue, "close") {
+			req.KeepAlive = false
+		} else if asciiContainsFoldBytes(rawValue, "keep-alive") {
+			req.KeepAlive = true
+		}
+		return nil
+	}
+	return nil
+}
 
-	return p.pos, nil
+// asciiEqualFold reports whether b equals s under ASCII case-insensitive comparison
+func asciiEqualFold(b []byte, s string) bool {
+	if len(b) != len(s) {
+		return false
+	}
+	for i := 0; i < len(b); i++ {
+		cb := b[i]
+		cs := s[i]
+		// to lower ASCII
+		if 'A' <= cb && cb <= 'Z' {
+			cb |= 0x20
+		}
+		if 'A' <= cs && cs <= 'Z' {
+			cs |= 0x20
+		}
+		if cb != cs {
+			return false
+		}
+	}
+	return true
+}
+
+// asciiContainsFoldString reports whether s contains sub under ASCII case-insensitive comparison
+func asciiContainsFoldString(s, sub string) bool {
+	if len(sub) == 0 {
+		return true
+	}
+	// naive scan with ASCII fold
+	n := len(s)
+	m := len(sub)
+	if m > n {
+		return false
+	}
+	for i := 0; i <= n-m; i++ {
+		match := true
+		for j := 0; j < m; j++ {
+			cs := s[i+j]
+			ct := sub[j]
+			if 'A' <= cs && cs <= 'Z' {
+				cs |= 0x20
+			}
+			if 'A' <= ct && ct <= 'Z' {
+				ct |= 0x20
+			}
+			if cs != ct {
+				match = false
+				break
+			}
+		}
+		if match {
+			return true
+		}
+	}
+	return false
+}
+
+// asciiContainsFoldBytes reports whether b contains sub (ASCII case-insensitive)
+func asciiContainsFoldBytes(b []byte, sub string) bool {
+	if len(sub) == 0 {
+		return true
+	}
+	m := len(sub)
+	if m > len(b) {
+		return false
+	}
+	for i := 0; i <= len(b)-m; i++ {
+		match := true
+		for j := 0; j < m; j++ {
+			cb := b[i+j]
+			cs := sub[j]
+			if 'A' <= cb && cb <= 'Z' {
+				cb |= 0x20
+			}
+			if 'A' <= cs && cs <= 'Z' {
+				cs |= 0x20
+			}
+			if cb != cs {
+				match = false
+				break
+			}
+		}
+		if match {
+			return true
+		}
+	}
+	return false
+}
+
+// parseInt64Bytes parses a base-10 int64 from ASCII bytes, returning ok=false on error
+func parseInt64Bytes(b []byte) (int64, bool) {
+	if len(b) == 0 {
+		return 0, false
+	}
+	var n int64
+	for i := 0; i < len(b); i++ {
+		c := b[i]
+		if c < '0' || c > '9' {
+			return 0, false
+		}
+		n = n*10 + int64(c-'0')
+	}
+	return n, true
 }
 
 // ParseChunkedBody parses chunked transfer encoding body.

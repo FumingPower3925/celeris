@@ -193,9 +193,11 @@ wrk-h1-celeris:
 
 wrk-h1-celeris-max:
 	@PORT=$$(python3 -c 'import socket; s=socket.socket(); s.bind(("",0)); print(s.getsockname()[1]); s.close()'); \
+	echo "Building example server..."; \
+	go build -tags "poll_opt gc_opt" -o bin/example ./cmd/example; \
 	echo "Starting Celeris H1 server (minimal) on :$${PORT}..."; \
-	EXAMPLE_MINIMAL=1 EXAMPLE_ADDR=:$$PORT go run -tags "poll_opt gc_opt" ./cmd/example > .server.log 2>&1 & echo $$! > .server.pid; \
-	sleep 1; \
+	EXAMPLE_MINIMAL=1 EXAMPLE_ADDR=:$$PORT ./bin/example > .server.log 2>&1 & echo $$! > .server.pid; \
+	sleep 2; \
 	echo "Running wrk max (/)..."; \
 	wrk --latency -t12 -c800 -d$(WRK_DURATION) http://127.0.0.1:$$PORT/ || true; \
 	echo "Running wrk max (/json)..."; \

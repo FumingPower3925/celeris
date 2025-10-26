@@ -54,7 +54,8 @@ type Headers struct {
 func NewHeaders() Headers {
 	return Headers{
 		headers: make([][2]string, 0),
-		index:   make(map[string]int),
+		// index is allocated lazily on first Set to avoid per-request map alloc
+		index: nil,
 	}
 }
 
@@ -62,20 +63,36 @@ func NewHeaders() Headers {
 // Keys are automatically converted to lowercase per HTTP/2 spec (RFC 7540).
 func (h *Headers) Set(key, value string) {
 	lowerKey := strings.ToLower(key)
+	// Lazily build index on first set if nil
+	if h.index == nil {
+		h.index = make(map[string]int, len(h.headers)+2)
+		for i := range h.headers {
+			h.index[h.headers[i][0]] = i
+		}
+	}
 	if idx, ok := h.index[lowerKey]; ok {
 		h.headers[idx][1] = value
-	} else {
-		h.index[lowerKey] = len(h.headers)
-		h.headers = append(h.headers, [2]string{lowerKey, value})
+		return
 	}
+	h.index[lowerKey] = len(h.headers)
+	h.headers = append(h.headers, [2]string{lowerKey, value})
 }
 
 // Get retrieves a header value by key.
 // Key lookup is case-insensitive per HTTP/2 spec (RFC 7540).
 func (h *Headers) Get(key string) string {
 	lowerKey := strings.ToLower(key)
-	if idx, ok := h.index[lowerKey]; ok {
-		return h.headers[idx][1]
+	if h.index != nil {
+		if idx, ok := h.index[lowerKey]; ok {
+			return h.headers[idx][1]
+		}
+		return ""
+	}
+	// No index map yet: linear search
+	for i := range h.headers {
+		if h.headers[i][0] == lowerKey {
+			return h.headers[i][1]
+		}
 	}
 	return ""
 }
@@ -84,12 +101,21 @@ func (h *Headers) Get(key string) string {
 // Key lookup is case-insensitive per HTTP/2 spec (RFC 7540).
 func (h *Headers) Del(key string) {
 	lowerKey := strings.ToLower(key)
-	if idx, ok := h.index[lowerKey]; ok {
-		h.headers = append(h.headers[:idx], h.headers[idx+1:]...)
-		delete(h.index, lowerKey)
-
-		for i := idx; i < len(h.headers); i++ {
-			h.index[h.headers[i][0]] = i
+	if h.index != nil {
+		if idx, ok := h.index[lowerKey]; ok {
+			h.headers = append(h.headers[:idx], h.headers[idx+1:]...)
+			delete(h.index, lowerKey)
+			for i := idx; i < len(h.headers); i++ {
+				h.index[h.headers[i][0]] = i
+			}
+		}
+		return
+	}
+	// No index map yet: linear removal
+	for i := range h.headers {
+		if h.headers[i][0] == lowerKey {
+			h.headers = append(h.headers[:i], h.headers[i+1:]...)
+			break
 		}
 	}
 }
@@ -103,8 +129,16 @@ func (h *Headers) All() [][2]string {
 // Key lookup is case-insensitive per HTTP/2 spec (RFC 7540).
 func (h *Headers) Has(key string) bool {
 	lowerKey := strings.ToLower(key)
-	_, ok := h.index[lowerKey]
-	return ok
+	if h.index != nil {
+		_, ok := h.index[lowerKey]
+		return ok
+	}
+	for i := range h.headers {
+		if h.headers[i][0] == lowerKey {
+			return true
+		}
+	}
+	return false
 }
 
 func newContext(ctx context.Context, s *stream.Stream, writeResponse func(uint32, int, [][2]string, []byte) error) *Context {
@@ -140,6 +174,59 @@ func newContext(ctx context.Context, s *stream.Stream, writeResponse func(uint32
 		c.headers.Set(name, value)
 	})
 
+	return c
+}
+
+// NewContextH1 constructs a Context for HTTP/1.1 requests without requiring an HTTP/2 stream.
+// It accepts method, path, authority, request headers and an optional body. The write function
+// is used to send responses and maps to the underlying transport write path.
+func NewContextH1(ctx context.Context, method, path, authority string, reqHeaders [][2]string, body []byte, write func(status int, headers [][2]string, body []byte) error) *Context {
+	c := &Context{
+		StreamID:        1,
+		headers:         NewHeaders(),
+		body:            bytes.NewReader(body),
+		statusCode:      200,
+		responseHeaders: NewHeaders(),
+		responseBody:    responseBufPool.Get().(*bytes.Buffer),
+		stream:          nil,
+		ctx:             ctx,
+		writeResponse: func(_ uint32, status int, headers [][2]string, b []byte) error {
+			return write(status, headers, b)
+		},
+		values:    nil,
+		method:    method,
+		path:      path,
+		scheme:    "http",
+		authority: authority,
+	}
+	// Copy request headers
+	for _, h := range reqHeaders {
+		c.headers.Set(h[0], h[1])
+	}
+	return c
+}
+
+// NewContextH1NoHeaders constructs an H1 Context without copying request headers.
+// This is a lighter path for benchmarks and handlers that don't inspect request headers.
+func NewContextH1NoHeaders(ctx context.Context, method, path, authority string, body []byte, write func(status int, headers [][2]string, body []byte) error) *Context {
+	c := &Context{
+		StreamID:        1,
+		headers:         NewHeaders(),
+		body:            bytes.NewReader(body),
+		statusCode:      200,
+		responseHeaders: NewHeaders(),
+		responseBody:    responseBufPool.Get().(*bytes.Buffer),
+		stream:          nil,
+		ctx:             ctx,
+		writeResponse: func(_ uint32, status int, headers [][2]string, b []byte) error {
+			return write(status, headers, b)
+		},
+		values:    nil,
+		method:    method,
+		path:      path,
+		scheme:    "http",
+		authority: authority,
+	}
 	return c
 }
 
@@ -225,13 +312,14 @@ func (c *Context) WriteString(s string) (int, error) {
 func (c *Context) JSON(status int, v interface{}) error {
 	c.writeMu.Lock()
 	c.statusCode = status
-	c.responseHeaders.Set("content-type", "application/json")
+	// Avoid map allocation: append headers directly
+	c.responseHeaders.headers = append(c.responseHeaders.headers, [2]string{"content-type", "application/json"})
 	data, err := json.Marshal(v)
 	if err != nil {
 		c.writeMu.Unlock()
 		return err
 	}
-	c.responseHeaders.Set("content-length", strconv.Itoa(len(data)))
+	c.responseHeaders.headers = append(c.responseHeaders.headers, [2]string{"content-length", strconv.Itoa(len(data))})
 	_, err = c.responseBody.Write(data)
 	c.writeMu.Unlock()
 	if err != nil {
@@ -244,9 +332,9 @@ func (c *Context) JSON(status int, v interface{}) error {
 func (c *Context) String(status int, format string, values ...interface{}) error {
 	c.writeMu.Lock()
 	c.statusCode = status
-	c.responseHeaders.Set("content-type", "text/plain; charset=utf-8")
+	c.responseHeaders.headers = append(c.responseHeaders.headers, [2]string{"content-type", "text/plain; charset=utf-8"})
 	s := fmt.Sprintf(format, values...)
-	c.responseHeaders.Set("content-length", strconv.Itoa(len(s)))
+	c.responseHeaders.headers = append(c.responseHeaders.headers, [2]string{"content-length", strconv.Itoa(len(s))})
 	c.writeMu.Unlock()
 	return c.flushWithBody([]byte(s))
 }
@@ -255,8 +343,8 @@ func (c *Context) String(status int, format string, values ...interface{}) error
 func (c *Context) HTML(status int, html string) error {
 	c.writeMu.Lock()
 	c.statusCode = status
-	c.responseHeaders.Set("content-type", "text/html; charset=utf-8")
-	c.responseHeaders.Set("content-length", strconv.Itoa(len(html)))
+	c.responseHeaders.headers = append(c.responseHeaders.headers, [2]string{"content-type", "text/html; charset=utf-8"})
+	c.responseHeaders.headers = append(c.responseHeaders.headers, [2]string{"content-length", strconv.Itoa(len(html))})
 	c.writeMu.Unlock()
 	return c.flushWithBody([]byte(html))
 }
@@ -265,8 +353,8 @@ func (c *Context) HTML(status int, html string) error {
 func (c *Context) Data(status int, contentType string, data []byte) error {
 	c.writeMu.Lock()
 	c.statusCode = status
-	c.responseHeaders.Set("content-type", contentType)
-	c.responseHeaders.Set("content-length", strconv.Itoa(len(data)))
+	c.responseHeaders.headers = append(c.responseHeaders.headers, [2]string{"content-type", contentType})
+	c.responseHeaders.headers = append(c.responseHeaders.headers, [2]string{"content-length", strconv.Itoa(len(data))})
 	c.writeMu.Unlock()
 	return c.flushWithBody(data)
 }
@@ -275,8 +363,8 @@ func (c *Context) Data(status int, contentType string, data []byte) error {
 func (c *Context) Plain(status int, s string) error {
 	c.writeMu.Lock()
 	c.statusCode = status
-	c.responseHeaders.Set("content-type", "text/plain; charset=utf-8")
-	c.responseHeaders.Set("content-length", strconv.Itoa(len(s)))
+	c.responseHeaders.headers = append(c.responseHeaders.headers, [2]string{"content-type", "text/plain; charset=utf-8"})
+	c.responseHeaders.headers = append(c.responseHeaders.headers, [2]string{"content-length", strconv.Itoa(len(s))})
 	c.writeMu.Unlock()
 	return c.flushWithBody([]byte(s))
 }

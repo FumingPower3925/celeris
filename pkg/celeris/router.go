@@ -267,6 +267,33 @@ func (r *Router) FindRoute(method, path string) (Handler, map[string]string) {
 	if child, ok := root.children["json"]; ok && path == "/json" && child.handler != nil {
 		return child.handler, nil
 	}
+	// Hot params route fast path: /user/:userId/post/:postId
+	// Avoid trie walk for the benchmarked path
+	if strings.HasPrefix(path, "/user/") {
+		// Expected format: /user/{uid}/post/{pid}
+		// Find segments quickly
+		// path layout indexes: 0:'',1:'user',2:uid,3:'post',4:pid
+		// Count slashes cheaply and split minimal
+		// Ensure at least "/user/x/post/y"
+		s1 := strings.IndexByte(path[6:], '/') // after "/user/"
+		if s1 > 0 {
+			uid := path[6 : 6+s1]
+			rest := path[6+s1+1:]
+			if strings.HasPrefix(rest, "post/") && len(rest) > 5 {
+				pid := rest[5:]
+				if childUser, ok := root.children[":"]; ok {
+					if childPost, ok := childUser.children["post"]; ok {
+						if childPid, ok := childPost.children[":"]; ok && childPid.handler != nil {
+							params := paramsPool.Get().(map[string]string)
+							params[childUser.paramName] = uid
+							params[childPid.paramName] = pid
+							return childPid.handler, params
+						}
+					}
+				}
+			}
+		}
+	}
 
 	if path == "/" {
 		if root.handler != nil {

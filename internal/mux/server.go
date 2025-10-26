@@ -44,6 +44,9 @@ type Server struct {
 	enableH2 bool
 }
 
+// verboseConnLogging gates per-connection log lines to avoid formatting overhead under load
+const verboseConnLogging = false
+
 // connSession tracks per-connection state during protocol detection.
 type connSession struct {
 	buffer   []byte
@@ -118,6 +121,9 @@ func (s *Server) Start() error {
 		gnet.WithReusePort(s.reusePort),
 		// Prefer low-latency writes for small responses
 		gnet.WithTCPNoDelay(gnet.TCPNoDelay),
+		// Hint gnet to enlarge read/write buffers to reduce syscalls under load
+		gnet.WithSocketRecvBuffer(1 << 20), // 1 MiB
+		gnet.WithSocketSendBuffer(1 << 20), // 1 MiB
 	}
 
 	if s.numEventLoop > 0 {
@@ -184,7 +190,9 @@ func (s *Server) OnOpen(c gnet.Conn) ([]byte, gnet.Action) {
 		buffer: make([]byte, 0, minDetectBytes),
 	}
 	s.connections.Store(c, session)
-	s.logger.Printf("New connection from %s", c.RemoteAddr().String())
+	if verboseConnLogging {
+		s.logger.Printf("New connection from %s", c.RemoteAddr().String())
+	}
 	return nil, gnet.None
 }
 
@@ -208,10 +216,12 @@ func (s *Server) OnClose(c gnet.Conn, err error) gnet.Action {
 
 	s.connections.Delete(c)
 
-	if err != nil {
-		s.logger.Printf("Connection closed with error: %v", err)
-	} else {
-		s.logger.Printf("Connection closed from %s", c.RemoteAddr().String())
+	if verboseConnLogging {
+		if err != nil {
+			s.logger.Printf("Connection closed with error: %v", err)
+		} else {
+			s.logger.Printf("Connection closed from %s", c.RemoteAddr().String())
+		}
 	}
 
 	return gnet.None

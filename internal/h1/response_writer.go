@@ -13,7 +13,6 @@ var (
 	statusLine200       = []byte("HTTP/1.1 200 OK\r\n")
 	headerContentLength = []byte("content-length: ")
 	headerConnection    = []byte("connection: ")
-	headerKeepAlive     = []byte("keep-alive\r\n")
 	headerClose         = []byte("close\r\n")
 	headerSep           = []byte(": ")
 	crlf                = []byte("\r\n")
@@ -42,6 +41,7 @@ type ResponseWriter struct {
 	contentLength  int64
 	bytesWritten   int64
 	coalesceBuf    []byte
+	coalescePooled *[]byte
 	coalesceThresh int
 	releases       []*[]byte
 }
@@ -54,12 +54,26 @@ func (w *ResponseWriter) WriteRaw(resp []byte) error {
 
 // NewResponseWriter creates a new HTTP/1.1 response writer.
 func NewResponseWriter(conn gnet.Conn, logger *log.Logger, keepAlive bool) *ResponseWriter {
+	// Allocate coalescing buffer from pool to avoid per-connection allocations
+	pooled := responseBufferPool.Get().(*[]byte)
+	buf := (*pooled)[:0]
+	// Ensure a minimum capacity for coalescing
+	if cap(buf) < 65536 {
+		// Return small pooled buffer and allocate a larger one temporarily for coalescing
+		responseBufferPool.Put(pooled)
+		pooled = new([]byte)
+		b := make([]byte, 0, 65536)
+		*pooled = b
+		buf = (*pooled)[:0]
+	}
+
 	return &ResponseWriter{
 		conn:           conn,
 		logger:         logger,
 		keepAlive:      keepAlive,
-		coalesceThresh: 32768,
-		coalesceBuf:    make([]byte, 0, 32768),
+		coalesceThresh: 65536,
+		coalesceBuf:    buf,
+		coalescePooled: pooled,
 	}
 }
 
@@ -73,7 +87,7 @@ func (w *ResponseWriter) WriteResponse(status int, headers [][2]string, body []b
 
 		// Estimate final size to minimize reallocations
 		// Status line: ~ 17-40 bytes, CRLF: 2, connection header ~ (len + value)
-		const smallBodyMax = 16 * 1024
+		const smallBodyMax = 16384
 		wantCoalesceBody := len(body) > 0 && len(body) <= smallBodyMax
 		expected := 32 + 2 + 2
 		// Headers length + CRLF per header
@@ -196,10 +210,19 @@ func (w *ResponseWriter) writeBody(body []byte) {
 
 	// If coalesce buffer exceeds threshold, move it to pending and reset
 	if len(w.coalesceBuf) >= w.coalesceThresh {
-		buf := make([]byte, len(w.coalesceBuf))
-		copy(buf, w.coalesceBuf)
-		w.pending = append(w.pending, buf)
-		w.coalesceBuf = w.coalesceBuf[:0]
+		// Hand off current coalesced buffer without copy
+		handoff := w.coalesceBuf
+		w.pending = append(w.pending, handoff)
+		// Track buffer for release after write completes
+		if w.coalescePooled != nil {
+			// Update pooled slice to reference current handoff
+			*w.coalescePooled = handoff
+			w.releases = append(w.releases, w.coalescePooled)
+		}
+		// Acquire a fresh coalescing buffer
+		pooled := responseBufferPool.Get().(*[]byte)
+		w.coalescePooled = pooled
+		w.coalesceBuf = (*pooled)[:0]
 	}
 }
 
@@ -220,10 +243,17 @@ func (w *ResponseWriter) flush() error {
 
 	// If there is coalesced data not yet moved to pending, move it now
 	if len(w.coalesceBuf) > 0 {
-		buf := make([]byte, len(w.coalesceBuf))
-		copy(buf, w.coalesceBuf)
-		w.pending = append(w.pending, buf)
-		w.coalesceBuf = w.coalesceBuf[:0]
+		// Hand off remaining coalesced data without copying
+		handoff := w.coalesceBuf
+		w.pending = append(w.pending, handoff)
+		if w.coalescePooled != nil {
+			*w.coalescePooled = handoff
+			w.releases = append(w.releases, w.coalescePooled)
+		}
+		// Allocate a fresh buffer for future coalescing
+		pooled := responseBufferPool.Get().(*[]byte)
+		w.coalescePooled = pooled
+		w.coalesceBuf = (*pooled)[:0]
 	}
 
 	batch := w.pending
@@ -232,56 +262,13 @@ func (w *ResponseWriter) flush() error {
 	w.releases = nil
 
 	if len(batch) == 0 {
-		_ = w.conn.Wake(nil)
 		return nil
 	}
 
 	w.inflight = true
 
-	// Capture releases for this batch in closure
+	// Vectorized async write to minimize syscalls
 	relThis := rel
-	// If only one buffer, use AsyncWrite for a slightly cheaper path
-	if len(batch) == 1 {
-		b := batch[0]
-		return w.conn.AsyncWrite(b, func(_ gnet.Conn, err error) error {
-			if err != nil && w.logger != nil {
-				w.logger.Printf("AsyncWrite callback error: %v", err)
-			}
-			// Release pooled buffers used in this batch
-			for _, p := range relThis {
-				if p != nil {
-					*p = (*p)[:0]
-					responseBufferPool.Put(p)
-				}
-			}
-			// Check queued data
-			next := w.queued
-			nextRel := w.queuedReleases
-			if len(next) > 0 {
-				w.queued = nil
-				w.queuedReleases = nil
-				w.inflight = true
-				relNext := nextRel
-				return w.conn.AsyncWritev(next, func(_ gnet.Conn, err error) error {
-					if err != nil && w.logger != nil {
-						w.logger.Printf("AsyncWritev callback error: %v", err)
-					}
-					for _, p := range relNext {
-						if p != nil {
-							*p = (*p)[:0]
-							responseBufferPool.Put(p)
-						}
-					}
-					w.inflight = false
-					return nil
-				})
-			}
-			w.inflight = false
-			return nil
-		})
-	}
-
-	// Vectorized async write to minimize syscalls for multiple buffers
 	return w.conn.AsyncWritev(batch, func(_ gnet.Conn, err error) error {
 		if err != nil && w.logger != nil {
 			w.logger.Printf("AsyncWritev callback error: %v", err)

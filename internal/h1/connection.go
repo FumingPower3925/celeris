@@ -23,6 +23,11 @@ type Connection struct {
 	req     Request
 }
 
+// h1FastAdapter is a minimal interface to call the H1 fast-path on the adapter without importing pkg/celeris
+type h1FastAdapter interface {
+	HandleH1Fast(ctx context.Context, method, path, authority string, reqHeaders [][2]string, body []byte, write func(status int, headers [][2]string, body []byte) error) error
+}
+
 // NewConnection creates a new HTTP/1.1 connection.
 func NewConnection(ctx context.Context, c gnet.Conn, handler stream.Handler, logger *log.Logger) *Connection {
 	return &Connection{
@@ -43,6 +48,7 @@ func (c *Connection) HandleData(data []byte) error {
 		// Support multiple pipelined requests in the same incoming buffer
 		offset := 0
 		for offset < len(data) {
+			c.parser.noStringHeaders = true
 			c.parser.Reset(data[offset:])
 			c.req.Reset()
 			req := &c.req
@@ -72,12 +78,30 @@ func (c *Connection) HandleData(data []byte) error {
 				break
 			}
 
-			// No body: handle request directly without touching the buffer
-			s := c.requestToStream(req, nil)
+			// No body: handle request directly using fast adapter when available
 			c.writer.Reset(req.KeepAlive)
-			if err := c.handler.HandleStream(c.ctx, s); err != nil {
-				c.logger.Printf("Handler error: %v", err)
-				return c.sendError(500, "Internal Server Error")
+			if adapter, ok := c.handler.(h1FastAdapter); ok {
+				writeFn := func(status int, headers [][2]string, body []byte) error {
+					return c.writer.WriteResponse(status, headers, body, true)
+				}
+				// For no-body and common GET paths, avoid passing headers slice to minimize copies
+				if len(req.Headers) == 0 || (req.Method == "GET" && !req.ChunkedEncoding && req.ContentLength <= 0) {
+					if err := adapter.HandleH1Fast(c.ctx, req.Method, req.Path, req.Host, nil, nil, writeFn); err != nil {
+						c.logger.Printf("Handler error: %v", err)
+						return c.sendError(500, "Internal Server Error")
+					}
+					break
+				}
+				if err := adapter.HandleH1Fast(c.ctx, req.Method, req.Path, req.Host, req.Headers, nil, writeFn); err != nil {
+					c.logger.Printf("Handler error: %v", err)
+					return c.sendError(500, "Internal Server Error")
+				}
+			} else {
+				s := c.requestToStream(req, nil)
+				if err := c.handler.HandleStream(c.ctx, s); err != nil {
+					c.logger.Printf("Handler error: %v", err)
+					return c.sendError(500, "Internal Server Error")
+				}
 			}
 			if !req.KeepAlive {
 				return fmt.Errorf("connection close requested")
@@ -97,6 +121,7 @@ func (c *Connection) HandleData(data []byte) error {
 
 	// Buffered path: parse from accumulated buffer
 	for c.buffer.Len() > 0 {
+		c.parser.noStringHeaders = true
 		c.parser.Reset(c.buffer.Bytes())
 		c.req.Reset()
 		req := &c.req
@@ -141,10 +166,19 @@ func (c *Connection) handleRequest(req *Request, headerBytes int) error {
 			return nil
 		}
 
-		// Consume headers and extract body
+		// Consume headers and zero-copy slice body directly from buffer
 		c.buffer.Next(headerBytes)
-		bodyData = make([]byte, bodyNeeded)
-		_, _ = c.buffer.Read(bodyData)
+		// bytes.Buffer.Bytes() returns underlying slice; read without extra copy by slicing
+		buf := c.buffer.Bytes()
+		if int64(len(buf)) < bodyNeeded {
+			// Fallback: should not happen because available check above, but guard anyway
+			bodyData = make([]byte, bodyNeeded)
+			_, _ = c.buffer.Read(bodyData)
+		} else {
+			bodyData = buf[:bodyNeeded]
+			// Advance buffer by bodyNeeded without copying
+			c.buffer.Next(int(bodyNeeded))
+		}
 	case bodyNeeded == -1:
 		// Chunked encoding - read all chunks
 		c.buffer.Next(headerBytes)
@@ -178,16 +212,23 @@ func (c *Connection) handleRequest(req *Request, headerBytes int) error {
 		c.buffer.Next(headerBytes)
 	}
 
-	// Convert HTTP/1.1 request to stream format for handler
-	s := c.requestToStream(req, bodyData)
-
-	// Reset writer for new response
-	c.writer.Reset(req.KeepAlive)
-
-	// Call handler
-	if err := c.handler.HandleStream(c.ctx, s); err != nil {
-		c.logger.Printf("Handler error: %v", err)
-		return c.sendError(500, "Internal Server Error")
+	// Fast path: call adapter's H1 direct handler when available, otherwise fallback
+	if adapter, ok := c.handler.(h1FastAdapter); ok {
+		writeFn := func(status int, headers [][2]string, body []byte) error {
+			return c.writer.WriteResponse(status, headers, body, true)
+		}
+		c.writer.Reset(req.KeepAlive)
+		if err := adapter.HandleH1Fast(c.ctx, req.Method, req.Path, req.Host, req.Headers, bodyData, writeFn); err != nil {
+			c.logger.Printf("Handler error: %v", err)
+			return c.sendError(500, "Internal Server Error")
+		}
+	} else {
+		s := c.requestToStream(req, bodyData)
+		c.writer.Reset(req.KeepAlive)
+		if err := c.handler.HandleStream(c.ctx, s); err != nil {
+			c.logger.Printf("Handler error: %v", err)
+			return c.sendError(500, "Internal Server Error")
+		}
 	}
 
 	// If not keep-alive, close connection
@@ -202,30 +243,27 @@ func (c *Connection) handleRequest(req *Request, headerBytes int) error {
 func (c *Connection) requestToStream(req *Request, body []byte) *stream.Stream {
 	s := stream.NewStream(1) // Use stream ID 1 for HTTP/1.1
 
-	// Add pseudo-headers (HTTP/2 style)
-	s.AddHeader(":method", req.Method)
-	s.AddHeader(":path", req.Path)
-	s.AddHeader(":scheme", "http")
-	s.AddHeader(":authority", req.Host)
+	// Batch-assign headers without per-header lock churn
+	hdrs := make([][2]string, 0, len(req.Headers)+4)
+	hdrs = append(hdrs,
+		[2]string{":method", req.Method},
+		[2]string{":path", req.Path},
+		[2]string{":scheme", "http"},
+		[2]string{":authority", req.Host},
+	)
+	hdrs = append(hdrs, req.Headers...)
+	s.Headers = hdrs
 
-	// Add regular headers
-	for _, h := range req.Headers {
-		s.AddHeader(h[0], h[1])
-	}
-
-	// Add body data
+	// Write body directly into stream buffer to avoid AddData lock
 	if len(body) > 0 {
-		_ = s.AddData(body)
+		_, _ = s.Data.Write(body)
 	}
 
 	s.EndStream = true
 	s.SetState(stream.StateHalfClosedRemote)
 
 	// Set response writer
-	s.ResponseWriter = &h1ResponseWriter{
-		writer: c.writer,
-	}
-
+	s.ResponseWriter = &h1ResponseWriter{writer: c.writer}
 	return s
 }
 

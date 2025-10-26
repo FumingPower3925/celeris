@@ -74,19 +74,21 @@ func (s *Server) OnTraffic(c gnet.Conn) gnet.Action {
 		return gnet.Close
 	}
 
-	// Read all available data
-	buf, err := c.Next(-1)
-	if err != nil {
-		s.logger.Printf("Error reading data: %v", err)
-		return gnet.Close
+	// Drain all available data from the connection
+	for {
+		buf, err := c.Next(-1)
+		if err != nil {
+			s.logger.Printf("Error reading data: %v", err)
+			return gnet.Close
+		}
+		if len(buf) == 0 {
+			break
+		}
+		if err := conn.HandleData(buf); err != nil {
+			s.logger.Printf("Error handling data: %v", err)
+			return gnet.Close
+		}
 	}
-
-	// Process the data
-	if err := conn.HandleData(buf); err != nil {
-		s.logger.Printf("Error handling data: %v", err)
-		return gnet.Close
-	}
-
 	return gnet.None
 }
 
