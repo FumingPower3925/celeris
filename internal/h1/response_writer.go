@@ -46,6 +46,12 @@ type ResponseWriter struct {
 	releases       []*[]byte
 }
 
+// WriteRaw writes a prebuilt HTTP/1.1 response buffer directly.
+func (w *ResponseWriter) WriteRaw(resp []byte) error {
+	w.pending = append(w.pending, resp)
+	return w.flush()
+}
+
 // NewResponseWriter creates a new HTTP/1.1 response writer.
 func NewResponseWriter(conn gnet.Conn, logger *log.Logger, keepAlive bool) *ResponseWriter {
 	return &ResponseWriter{
