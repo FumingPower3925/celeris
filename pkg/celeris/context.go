@@ -32,6 +32,8 @@ type Context struct {
 	pushPromise     func(streamID uint32, path string, headers [][2]string) error
 	values          map[string]interface{}
 	hasFlushed      bool
+	// streamBuffer accumulates chunks when Flush is called multiple times
+	streamBuffer []byte
 	// cached pseudo-headers for fast access
 	method    string
 	path      string
@@ -389,9 +391,18 @@ func (c *Context) flush() error {
 	if c.writeResponse == nil {
 		return fmt.Errorf("no write response function")
 	}
-	err := c.writeResponse(c.StreamID, c.statusCode, c.responseHeaders.All(), c.responseBody.Bytes())
+	var body []byte
+	if len(c.streamBuffer) > 0 {
+		body = c.streamBuffer
+	} else {
+		body = c.responseBody.Bytes()
+	}
+	err := c.writeResponse(c.StreamID, c.statusCode, c.responseHeaders.All(), body)
 	c.responseBody.Reset()
 	c.hasFlushed = true
+	if len(c.streamBuffer) > 0 {
+		c.streamBuffer = c.streamBuffer[:0]
+	}
 	if c.values != nil {
 		for k := range c.values {
 			delete(c.values, k)
@@ -500,7 +511,10 @@ func (c *Context) Flush() error {
 	if c.stream != nil {
 		c.stream.IsStreaming = true
 	}
-	err := c.writeResponse(c.StreamID, c.statusCode, c.responseHeaders.All(), data)
+	// Accumulate data; defer actual send to final flush for robustness
+	c.streamBuffer = append(c.streamBuffer, data...)
+	// Do not send now; just mark flushed and reset buffer
+	var err error
 	c.responseBody.Reset()
 	c.hasFlushed = true
 	return err

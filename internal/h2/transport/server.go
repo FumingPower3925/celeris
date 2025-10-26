@@ -1117,28 +1117,17 @@ func (c *Connection) WriteResponse(streamID uint32, status int, headers [][2]str
 		return nil
 	}
 
-	// Encode headers outside connection write lock to reduce contention.
-	// Use Encode (copy) so the returned slice remains valid after lock acquisition.
+	// Serialize HPACK encoding and write with connection-level lock to avoid concurrent encoder use.
+	c.writeMu.Lock()
+	// Use Encode (copy) so the returned slice remains valid while holding the lock
 	headerBlock, err := c.headerEncoder.Encode(allHeaders)
 	// return the pooled slice
 	*pooled = allHeaders[:0]
 	headersSlicePool.Put(pooled)
 	if err != nil {
+		c.writeMu.Unlock()
 		c.logger.Printf("ERROR encoding headers: %v", err)
 		return fmt.Errorf("failed to encode headers: %w", err)
-	}
-
-	// Acquire per-stream lock to reduce cross-stream contention; fall back to conn lock if missing
-	var perStream *stream.Stream
-	if st, ok := c.processor.GetManager().GetStream(streamID); ok {
-		perStream = st
-	}
-	if perStream != nil {
-		perStream.WriteLock()
-		defer perStream.WriteUnlock()
-	} else {
-		c.writeMu.Lock()
-		defer c.writeMu.Unlock()
 	}
 
 	// Write HEADERS (and CONTINUATION) respecting peer MAX_FRAME_SIZE
@@ -1154,12 +1143,14 @@ func (c *Connection) WriteResponse(streamID uint32, status int, headers [][2]str
 	// avoid logging in hot path
 	if err := c.writer.WriteHeaders(streamID, endStream, headerBlock, maxFrame); err != nil {
 		c.logger.Printf("ERROR writing HEADERS: %v", err)
+		c.writeMu.Unlock()
 		return fmt.Errorf("failed to write headers: %w", err)
 	}
 
 	// Mark headers as sent BEFORE flushing
 	if st, ok := c.processor.GetManager().GetStream(streamID); ok {
 		if st.ClosedByReset {
+			c.writeMu.Unlock()
 			return fmt.Errorf("stream %d was reset by peer", streamID)
 		}
 		st.HeadersSent = true
@@ -1223,14 +1214,17 @@ func (c *Connection) WriteResponse(streamID uint32, status int, headers [][2]str
 		}
 		// Flush HEADERS + DATA together
 		if err := c.writer.Flush(); err != nil {
+			c.writeMu.Unlock()
 			return err
 		}
 		_ = c.conn.Wake(nil)
+		c.writeMu.Unlock()
 		return nil
 	}
 
 	// No body: flush HEADERS only
 	if err := c.writer.Flush(); err != nil {
+		c.writeMu.Unlock()
 		return err
 	}
 	_ = c.conn.Wake(nil)
@@ -1245,7 +1239,7 @@ func (c *Connection) WriteResponse(streamID uint32, status int, headers [][2]str
 			}
 		}
 	}
-
+	c.writeMu.Unlock()
 	return nil
 }
 
