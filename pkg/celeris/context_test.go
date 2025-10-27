@@ -32,7 +32,19 @@ func TestContext_Path(t *testing.T) {
 
 func TestContext_JSON(t *testing.T) {
 	s := stream.NewStream(1)
-	ctx := newContext(context.Background(), s, nil)
+
+	// Add mock write response function that captures response data
+	var capturedStatus int
+	var capturedHeaders [][2]string
+	var capturedBody []byte
+	writeResponseFunc := func(_ uint32, status int, headers [][2]string, body []byte) error {
+		capturedStatus = status
+		capturedHeaders = headers
+		capturedBody = body
+		return nil
+	}
+
+	ctx := newContext(context.Background(), s, writeResponseFunc)
 
 	data := map[string]string{"key": "value"}
 	err := ctx.JSON(200, data)
@@ -41,24 +53,41 @@ func TestContext_JSON(t *testing.T) {
 		t.Errorf("JSON() error = %v", err)
 	}
 
-	if ctx.Status() != 200 {
-		t.Errorf("Expected status 200, got %d", ctx.Status())
+	if capturedStatus != 200 {
+		t.Errorf("Expected status 200, got %d", capturedStatus)
 	}
 
 	expected := `{"key":"value"}`
-	if ctx.responseBody.String() != expected {
-		t.Errorf("Expected body %s, got %s", expected, ctx.responseBody.String())
+	if string(capturedBody) != expected {
+		t.Errorf("Expected body %s, got %s", expected, string(capturedBody))
 	}
 
-	if ctx.responseHeaders.Get("content-type") != "application/json" {
-		t.Errorf("Expected content-type application/json, got %s",
-			ctx.responseHeaders.Get("content-type"))
+	// Check headers
+	contentType := ""
+	for _, header := range capturedHeaders {
+		if header[0] == "content-type" {
+			contentType = header[1]
+			break
+		}
+	}
+	if contentType != "application/json" {
+		t.Errorf("Expected content-type application/json, got %s", contentType)
 	}
 }
 
 func TestContext_String(t *testing.T) {
 	s := stream.NewStream(1)
-	ctx := newContext(context.Background(), s, nil)
+
+	// Add mock write response function that captures response data
+	var capturedStatus int
+	var capturedBody []byte
+	writeResponseFunc := func(_ uint32, status int, _ [][2]string, body []byte) error {
+		capturedStatus = status
+		capturedBody = body
+		return nil
+	}
+
+	ctx := newContext(context.Background(), s, writeResponseFunc)
 
 	err := ctx.String(200, "Hello, %s!", "World")
 
@@ -66,13 +95,13 @@ func TestContext_String(t *testing.T) {
 		t.Errorf("String() error = %v", err)
 	}
 
-	if ctx.Status() != 200 {
-		t.Errorf("Expected status 200, got %d", ctx.Status())
+	if capturedStatus != 200 {
+		t.Errorf("Expected status 200, got %d", capturedStatus)
 	}
 
 	expected := "Hello, World!"
-	if ctx.responseBody.String() != expected {
-		t.Errorf("Expected body %s, got %s", expected, ctx.responseBody.String())
+	if string(capturedBody) != expected {
+		t.Errorf("Expected body %s, got %s", expected, string(capturedBody))
 	}
 }
 

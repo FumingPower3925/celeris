@@ -19,7 +19,13 @@ func TestPrometheus_Middleware(t *testing.T) {
 	s := stream.NewStream(1)
 	s.AddHeader(":method", "GET")
 	s.AddHeader(":path", "/test")
-	ctx := newContext(context.Background(), s, nil)
+
+	// Add mock write response function
+	writeResponseFunc := func(_ uint32, _ int, _ [][2]string, _ []byte) error {
+		return nil
+	}
+
+	ctx := newContext(context.Background(), s, writeResponseFunc)
 
 	err := wrapped.ServeHTTP2(ctx)
 	if err != nil {
@@ -45,7 +51,13 @@ func TestPrometheusWithConfig_SkipPaths(t *testing.T) {
 	s := stream.NewStream(1)
 	s.AddHeader(":method", "GET")
 	s.AddHeader(":path", "/metrics")
-	ctx := newContext(context.Background(), s, nil)
+
+	// Add mock write response function
+	writeResponseFunc := func(_ uint32, _ int, _ [][2]string, _ []byte) error {
+		return nil
+	}
+
+	ctx := newContext(context.Background(), s, writeResponseFunc)
 
 	err := wrapped.ServeHTTP2(ctx)
 	if err != nil {
@@ -96,7 +108,13 @@ func TestPrometheusMetrics_StatusCodes(t *testing.T) {
 			s := stream.NewStream(1)
 			s.AddHeader(":method", "GET")
 			s.AddHeader(":path", "/test")
-			ctx := newContext(context.Background(), s, nil)
+
+			// Add mock write response function
+			writeResponseFunc := func(_ uint32, _ int, _ [][2]string, _ []byte) error {
+				return nil
+			}
+
+			ctx := newContext(context.Background(), s, writeResponseFunc)
 
 			err := wrapped.ServeHTTP2(ctx)
 			if err != nil {

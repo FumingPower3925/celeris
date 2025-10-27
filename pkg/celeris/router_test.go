@@ -24,7 +24,11 @@ func TestRouter_AddRoute(t *testing.T) {
 	s.AddHeader(":method", "GET")
 	s.AddHeader(":path", "/test")
 
-	ctx := newContext(context.Background(), s, nil)
+	// Add mock write response function
+	writeResponseFunc := func(_ uint32, _ int, _ [][2]string, _ []byte) error {
+		return nil
+	}
+	ctx := newContext(context.Background(), s, writeResponseFunc)
 	_ = router.ServeHTTP2(ctx)
 
 	if !called {
@@ -47,7 +51,11 @@ func TestRouter_Parameters(t *testing.T) {
 	s.AddHeader(":method", "GET")
 	s.AddHeader(":path", "/users/123")
 
-	ctx := newContext(context.Background(), s, nil)
+	// Add mock write response function
+	writeResponseFunc := func(_ uint32, _ int, _ [][2]string, _ []byte) error {
+		return nil
+	}
+	ctx := newContext(context.Background(), s, writeResponseFunc)
 	_ = router.ServeHTTP2(ctx)
 
 	if capturedID != "123" {
@@ -68,7 +76,11 @@ func TestRouter_NotFound(t *testing.T) {
 	s.AddHeader(":method", "GET")
 	s.AddHeader(":path", "/nonexistent")
 
-	ctx := newContext(context.Background(), s, nil)
+	// Add mock write response function
+	writeResponseFunc := func(_ uint32, _ int, _ [][2]string, _ []byte) error {
+		return nil
+	}
+	ctx := newContext(context.Background(), s, writeResponseFunc)
 	_ = router.ServeHTTP2(ctx)
 
 	if !called {
@@ -101,7 +113,11 @@ func TestRouter_Middleware(t *testing.T) {
 	s.AddHeader(":method", "GET")
 	s.AddHeader(":path", "/test")
 
-	ctx := newContext(context.Background(), s, nil)
+	// Add mock write response function
+	writeResponseFunc := func(_ uint32, _ int, _ [][2]string, _ []byte) error {
+		return nil
+	}
+	ctx := newContext(context.Background(), s, writeResponseFunc)
 	_ = router.ServeHTTP2(ctx)
 
 	if !middlewareCalled {
@@ -130,7 +146,11 @@ func TestRouter_Group(t *testing.T) {
 	s.AddHeader(":method", "GET")
 	s.AddHeader(":path", "/api/users")
 
-	ctx := newContext(context.Background(), s, nil)
+	// Add mock write response function
+	writeResponseFunc := func(_ uint32, _ int, _ [][2]string, _ []byte) error {
+		return nil
+	}
+	ctx := newContext(context.Background(), s, writeResponseFunc)
 	_ = router.ServeHTTP2(ctx)
 
 	if !called {
@@ -153,7 +173,11 @@ func TestRouter_Wildcard(t *testing.T) {
 	s.AddHeader(":method", "GET")
 	s.AddHeader(":path", "/files/docs/test.pdf")
 
-	ctx := newContext(context.Background(), s, nil)
+	// Add mock write response function
+	writeResponseFunc := func(_ uint32, _ int, _ [][2]string, _ []byte) error {
+		return nil
+	}
+	ctx := newContext(context.Background(), s, writeResponseFunc)
 	_ = router.ServeHTTP2(ctx)
 
 	// The wildcard captures the entire remaining path including the prefix
@@ -176,8 +200,12 @@ func BenchmarkRouter_StaticRoute(b *testing.B) {
 	s.AddHeader(":path", "/test")
 
 	b.ResetTimer()
+	// Add mock write response function
+	writeResponseFunc := func(_ uint32, _ int, _ [][2]string, _ []byte) error {
+		return nil
+	}
 	for i := 0; i < b.N; i++ {
-		ctx := newContext(context.Background(), s, nil)
+		ctx := newContext(context.Background(), s, writeResponseFunc)
 		_ = router.ServeHTTP2(ctx)
 	}
 }
@@ -197,8 +225,12 @@ func BenchmarkRouter_ParameterRoute(b *testing.B) {
 	s.AddHeader(":path", "/users/123")
 
 	b.ResetTimer()
+	// Add mock write response function
+	writeResponseFunc := func(_ uint32, _ int, _ [][2]string, _ []byte) error {
+		return nil
+	}
 	for i := 0; i < b.N; i++ {
-		ctx := newContext(context.Background(), s, nil)
+		ctx := newContext(context.Background(), s, writeResponseFunc)
 		_ = router.ServeHTTP2(ctx)
 	}
 }
@@ -241,7 +273,11 @@ func TestHTTPError_WithDetails(t *testing.T) {
 
 func TestDefaultErrorHandler_HTTPError(t *testing.T) {
 	s := stream.NewStream(1)
-	ctx := newContext(context.Background(), s, nil)
+	// Add mock write response function
+	writeResponseFunc := func(_ uint32, _ int, _ [][2]string, _ []byte) error {
+		return nil
+	}
+	ctx := newContext(context.Background(), s, writeResponseFunc)
 
 	err := NewHTTPError(400, "Bad Request")
 	handlerErr := DefaultErrorHandler(ctx, err)
@@ -259,7 +295,11 @@ func TestDefaultErrorHandler_HTTPError_JSON(t *testing.T) {
 	t.Skip("Accept header parsing requires full stream setup - tested in integration tests")
 	s := stream.NewStream(1)
 	s.AddHeader("accept", "application/json")
-	ctx := newContext(context.Background(), s, nil)
+	// Add mock write response function
+	writeResponseFunc := func(_ uint32, _ int, _ [][2]string, _ []byte) error {
+		return nil
+	}
+	ctx := newContext(context.Background(), s, writeResponseFunc)
 
 	err := NewHTTPError(404, "Not Found")
 	handlerErr := DefaultErrorHandler(ctx, err)
@@ -275,7 +315,11 @@ func TestDefaultErrorHandler_HTTPError_JSON(t *testing.T) {
 
 func TestDefaultErrorHandler_GenericError(t *testing.T) {
 	s := stream.NewStream(1)
-	ctx := newContext(context.Background(), s, nil)
+	// Add mock write response function
+	writeResponseFunc := func(_ uint32, _ int, _ [][2]string, _ []byte) error {
+		return nil
+	}
+	ctx := newContext(context.Background(), s, writeResponseFunc)
 
 	err := fmt.Errorf("generic error")
 	handlerErr := DefaultErrorHandler(ctx, err)
