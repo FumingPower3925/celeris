@@ -15,7 +15,8 @@ import (
 	"golang.org/x/net/http2"
 )
 
-// TestBasicRequest tests basic HTTP/2 request-response cycle
+// TestBasicRequest tests the basic HTTP/2 request-response cycle.
+// It verifies that a simple GET request returns the expected JSON response.
 func TestBasicRequest(t *testing.T) {
 	router := celeris.NewRouter()
 	router.GET("/test", func(ctx *celeris.Context) error {
@@ -47,7 +48,8 @@ func TestBasicRequest(t *testing.T) {
 	}
 }
 
-// TestRouteParameters tests route parameter extraction
+// TestRouteParameters tests URL parameter extraction functionality.
+// It verifies that route parameters are correctly parsed and made available to handlers.
 func TestRouteParameters(t *testing.T) {
 	router := celeris.NewRouter()
 
@@ -80,7 +82,8 @@ func TestRouteParameters(t *testing.T) {
 	t.Logf("Response: %s", string(body))
 }
 
-// TestNotFound tests 404 handling
+// TestNotFound tests 404 Not Found response handling.
+// It verifies that unmatched routes return the appropriate 404 response.
 func TestNotFound(t *testing.T) {
 	router := celeris.NewRouter()
 	router.GET("/exists", func(ctx *celeris.Context) error {

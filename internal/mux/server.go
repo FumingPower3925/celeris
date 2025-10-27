@@ -1,4 +1,5 @@
 // Package mux provides protocol multiplexing for HTTP/1.1 and HTTP/2.
+// It detects the protocol version from the first bytes of a connection and routes accordingly.
 package mux
 
 import (
@@ -18,10 +19,12 @@ const (
 	// HTTP/2 connection preface
 	http2Preface = "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"
 	// Minimum bytes needed to detect protocol (reduced to detect faster)
-	minDetectBytes = 4 // Enough to detect "GET ", "POST", "PRI " etc
+	// Enough bytes to detect "GET ", "POST", "PRI " etc.
+	minDetectBytes = 4
 )
 
-// Server is a multiplexing gnet EventHandler that routes to HTTP/1.1 or HTTP/2.
+// Server is a multiplexing gnet EventHandler that routes connections to HTTP/1.1 or HTTP/2.
+// It performs protocol detection on initial connection bytes and delegates to the appropriate handler.
 type Server struct {
 	gnet.BuiltinEventEngine
 
@@ -44,10 +47,12 @@ type Server struct {
 	enableH2 bool
 }
 
-// verboseConnLogging gates per-connection log lines to avoid formatting overhead under load
+// verboseConnLogging controls per-connection logging to avoid formatting overhead under load.
+// When enabled, it provides detailed logs for connection handling but may impact performance.
 const verboseConnLogging = false
 
-// connSession tracks per-connection state during protocol detection.
+// connSession tracks per-connection state during protocol detection and handling.
+// It maintains the protocol detection buffer and references to the appropriate connection handlers.
 type connSession struct {
 	buffer   []byte
 	detected bool
@@ -56,7 +61,8 @@ type connSession struct {
 	h2Conn   *h2transport.Connection
 }
 
-// Config holds multiplexer configuration.
+// Config defines the configuration options for the protocol multiplexer.
+// It controls which protocols are enabled and how connections are handled.
 type Config struct {
 	Addr                 string
 	Multicore            bool

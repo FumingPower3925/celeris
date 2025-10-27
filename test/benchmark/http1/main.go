@@ -1,4 +1,5 @@
-// Package main provides HTTP/1.1 ramp-up benchmark across multiple frameworks.
+// Package main provides HTTP/1.1 ramp-up benchmarking across multiple frameworks.
+// It measures performance under increasing load and generates comparative results.
 package main
 
 import (
@@ -69,6 +70,7 @@ const (
 	requestDelay      = 2 * time.Millisecond  // Minimal delay between requests per client
 )
 
+// main executes the HTTP/1.1 ramp-up benchmark suite
 func main() {
 	// Optional: start server-side pprof endpoint for the benchmark process
 	if os.Getenv("BENCH_SERVER_PPROF") == "1" {
@@ -94,7 +96,7 @@ func main() {
 	var results []RampUpResult
 	for _, fw := range frameworks {
 		fmt.Printf("\n╔════════════════════════════════════════════════════════════════════════════════╗\n")
-		fmt.Printf("║ Testing Framework: %-60s ║\n", fw)
+		fmt.Printf("║ Testing Framework: %-60s║\n", fw)
 		fmt.Printf("╚════════════════════════════════════════════════════════════════════════════════╝\n")
 
 		var fwResults []RampUpResult
@@ -156,6 +158,7 @@ func main() {
 	saveRampUpResults(results)
 }
 
+// scenarioPathStr returns the appropriate path for each benchmark scenario
 func scenarioPathStr(sc string) string {
 	switch sc {
 	case "simple":
@@ -169,6 +172,7 @@ func scenarioPathStr(sc string) string {
 	}
 }
 
+// startServerHTTP1 initializes and starts a server for the specified framework and scenario
 func startServerHTTP1(framework, scenario string) (*ServerHandle, *http.Client) {
 	addr := "127.0.0.1" + freePort()
 
@@ -222,6 +226,7 @@ func startServerHTTP1(framework, scenario string) (*ServerHandle, *http.Client) 
 }
 
 // freePort returns an available TCP port as a ":port" string.
+// freePort finds and returns an available TCP port for server binding
 func freePort() string {
 	ln, err := net.Listen("tcp", ":0")
 	if err != nil {
@@ -236,6 +241,7 @@ func freePort() string {
 	return addr[i:]
 }
 
+// warmup sends initial requests to ensure server is ready for benchmarking
 func warmup(client *http.Client, url string) error {
 	for i := 0; i < 5; i++ {
 		resp, err := client.Get(url)
@@ -593,6 +599,7 @@ func percentile(data []float64, p float64) float64 {
 	return sorted[idx]
 }
 
+// printRampUpResults displays benchmark results in a formatted table
 func printRampUpResults(results []RampUpResult) {
 	fmt.Println("\n=== HTTP/1.1 Ramp-Up Benchmark Results ===")
 	fmt.Printf("%-15s %-10s %12s %12s %12s %15s\n", "Framework", "Scenario", "MaxClients", "MaxRPS", "P95(ms)", "TimeToDegr(s)")
@@ -603,6 +610,7 @@ func printRampUpResults(results []RampUpResult) {
 	}
 }
 
+// saveRampUpResults saves benchmark results to JSON, CSV, and Markdown files
 func saveRampUpResults(results []RampUpResult) {
 	// JSON
 	f, err := os.Create("rampup_results_h1.json")

@@ -6,7 +6,7 @@ import (
 	"sync"
 )
 
-// Router handles HTTP request routing with support for parameters and middleware.
+// Router implements HTTP request routing with support for parameters, middleware, and groups.
 type Router struct {
 	routes       map[string]*routeNode
 	middlewares  []Middleware
@@ -14,7 +14,7 @@ type Router struct {
 	errorHandler ErrorHandler
 }
 
-// ErrorHandler is a function that handles errors returned from handlers.
+// ErrorHandler defines a function type for handling errors returned by HTTP handlers.
 type ErrorHandler func(ctx *Context, err error) error
 
 type routeNode struct {
@@ -26,10 +26,10 @@ type routeNode struct {
 	isWild    bool
 }
 
-// paramsPool reuses small maps for route params to reduce allocations per request.
+// paramsPool reuses small maps for route parameters to reduce allocations per request.
 var paramsPool = sync.Pool{New: func() any { return make(map[string]string, 4) }}
 
-// NewRouter creates a new Router instance.
+// NewRouter creates a new Router instance with default not found and error handlers.
 func NewRouter() *Router {
 	return &Router{
 		routes: make(map[string]*routeNode),
@@ -40,7 +40,7 @@ func NewRouter() *Router {
 	}
 }
 
-// DefaultErrorHandler provides a default error response renderer.
+// DefaultErrorHandler provides a default implementation for rendering error responses.
 func DefaultErrorHandler(ctx *Context, err error) error {
 	// Check if it's an HTTPError with status code
 	if httpErr, ok := err.(*HTTPError); ok {
@@ -66,7 +66,7 @@ func DefaultErrorHandler(ctx *Context, err error) error {
 	return ctx.String(500, "Internal Server Error")
 }
 
-// HTTPError represents an HTTP error with status code and message.
+// HTTPError represents an HTTP error with status code, message, and optional details.
 type HTTPError struct {
 	Code    int
 	Message string
@@ -86,23 +86,23 @@ func NewHTTPError(code int, message string) *HTTPError {
 	}
 }
 
-// WithDetails adds details to the HTTPError.
+// WithDetails adds additional details to the HTTPError and returns the modified error.
 func (e *HTTPError) WithDetails(details interface{}) *HTTPError {
 	e.Details = details
 	return e
 }
 
-// Use adds middleware to the router.
+// Use adds one or more middleware functions to the router's middleware stack.
 func (r *Router) Use(middlewares ...Middleware) {
 	r.middlewares = append(r.middlewares, middlewares...)
 }
 
-// NotFound sets the handler for unmatched routes.
+// NotFound sets the handler that will be called for routes that do not match any registered path.
 func (r *Router) NotFound(handler Handler) {
 	r.notFound = handler
 }
 
-// ErrorHandler sets the error handler for the router.
+// ErrorHandler sets the error handler function for the router.
 func (r *Router) ErrorHandler(handler ErrorHandler) {
 	r.errorHandler = handler
 }
@@ -214,7 +214,7 @@ func (r *Router) addRoute(method, path string, handler Handler) {
 	current.handler = handler
 }
 
-// ServeHTTP2 implements the Handler interface for HTTP/2 requests.
+// ServeHTTP2 implements the Handler interface to process incoming HTTP requests.
 func (r *Router) ServeHTTP2(ctx *Context) error {
 	handler, params := r.FindRoute(ctx.Method(), ctx.Path())
 
@@ -248,7 +248,8 @@ func (r *Router) ServeHTTP2(ctx *Context) error {
 	return ctx.flush()
 }
 
-// FindRoute locates the handler for a given method and path, returning any extracted parameters.
+// FindRoute locates the appropriate handler for a given HTTP method and path.
+// It returns the handler and any extracted route parameters.
 func (r *Router) FindRoute(method, path string) (Handler, map[string]string) {
 	root, ok := r.routes[method]
 	if !ok {
@@ -364,14 +365,14 @@ func (r *Router) FindRoute(method, path string) (Handler, map[string]string) {
 	return current.handler, params
 }
 
-// Group allows organizing routes with a common prefix and middleware.
+// Group allows organizing routes with a common path prefix and shared middleware stack.
 type Group struct {
 	router      *Router
 	prefix      string
 	middlewares []Middleware
 }
 
-// Group creates a new route group with a path prefix.
+// Group creates a new route group with the specified path prefix and optional middleware.
 func (r *Router) Group(prefix string, middlewares ...Middleware) *Group {
 	return &Group{
 		router:      r,
@@ -380,7 +381,7 @@ func (r *Router) Group(prefix string, middlewares ...Middleware) *Group {
 	}
 }
 
-// Use adds middleware to the group.
+// Use adds one or more middleware functions to the route group's middleware stack.
 func (g *Group) Use(middlewares ...Middleware) {
 	g.middlewares = append(g.middlewares, middlewares...)
 }

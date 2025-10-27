@@ -8,7 +8,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
-// TracingConfig holds configuration for OpenTelemetry tracing middleware.
+// TracingConfig defines the configuration options for the OpenTelemetry tracing middleware.
 type TracingConfig struct {
 	// TracerName is the name of the tracer (default: "celeris")
 	TracerName string
@@ -27,12 +27,14 @@ func DefaultTracingConfig() TracingConfig {
 	}
 }
 
-// Tracing returns a middleware that adds OpenTelemetry tracing.
+// Tracing returns a middleware that adds OpenTelemetry tracing to HTTP requests.
+// It uses default configuration settings and skips tracing for health and metrics endpoints.
 func Tracing() Middleware {
 	return TracingWithConfig(DefaultTracingConfig())
 }
 
 // TracingWithConfig returns a middleware that adds OpenTelemetry tracing with custom configuration.
+// It creates spans for incoming requests and propagates trace context through headers.
 func TracingWithConfig(config TracingConfig) Middleware {
 	if config.TracerName == "" {
 		config.TracerName = "celeris"
@@ -50,7 +52,7 @@ func TracingWithConfig(config TracingConfig) Middleware {
 
 	return func(next Handler) Handler {
 		return HandlerFunc(func(ctx *Context) error {
-			// Skip tracing for specified paths
+			// Skip tracing for paths in the skip list
 			if skipMap[ctx.Path()] {
 				return next.ServeHTTP2(ctx)
 			}
@@ -67,7 +69,7 @@ func TracingWithConfig(config TracingConfig) Middleware {
 			)
 			defer span.End()
 
-			// Set span attributes
+			// Set standard HTTP span attributes
 			span.SetAttributes(
 				attribute.String("http.method", ctx.Method()),
 				attribute.String("http.target", ctx.Path()),

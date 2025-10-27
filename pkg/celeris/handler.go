@@ -1,11 +1,11 @@
 package celeris
 
-// Handler defines the interface for HTTP/2 request handlers.
+// Handler defines the interface for HTTP request handlers.
 type Handler interface {
 	ServeHTTP2(ctx *Context) error
 }
 
-// HandlerFunc is an adapter to allow ordinary functions to be used as HTTP/2 handlers.
+// HandlerFunc is an adapter that allows ordinary functions to be used as HTTP handlers.
 type HandlerFunc func(ctx *Context) error
 
 // ServeHTTP2 calls f(ctx).
@@ -13,13 +13,13 @@ func (f HandlerFunc) ServeHTTP2(ctx *Context) error {
 	return f(ctx)
 }
 
-// Middleware is a function that wraps a Handler with additional functionality.
+// Middleware is a function that wraps a Handler to provide additional functionality.
 type Middleware func(Handler) Handler
 
 // MiddlewareFunc is a function-based middleware that receives the context and next handler.
 type MiddlewareFunc func(ctx *Context, next Handler) error
 
-// ToMiddleware converts a MiddlewareFunc to a Middleware.
+// ToMiddleware converts a MiddlewareFunc to a Middleware wrapper.
 func (m MiddlewareFunc) ToMiddleware() Middleware {
 	return func(next Handler) Handler {
 		return HandlerFunc(func(ctx *Context) error {
@@ -28,7 +28,7 @@ func (m MiddlewareFunc) ToMiddleware() Middleware {
 	}
 }
 
-// Chain combines multiple middlewares into a single middleware.
+// Chain combines multiple middlewares into a single middleware in the specified order.
 func Chain(middlewares ...Middleware) Middleware {
 	return func(final Handler) Handler {
 		for i := len(middlewares) - 1; i >= 0; i-- {

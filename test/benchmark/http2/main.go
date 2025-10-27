@@ -1,4 +1,5 @@
-// Package main provides the active ramp-up benchmark runner.
+// Package main provides HTTP/2 ramp-up benchmarking across multiple frameworks.
+// It measures performance under increasing load and generates comparative results.
 package main
 
 import (
@@ -75,13 +76,13 @@ const (
 )
 
 func runRampUpBenchmark() {
-	// Optional: start server-side pprof endpoint
+	// Optional: start server-side pprof endpoint for performance profiling
 	if os.Getenv("BENCH_SERVER_PPROF") == "1" {
 		go func() {
 			_ = http.ListenAndServe("127.0.0.1:6060", nil)
 		}()
 	}
-	// Check for FRAMEWORK environment variable to filter frameworks
+	// Check for FRAMEWORK environment variable to run benchmarks for specific framework
 	selectedFramework := os.Getenv("FRAMEWORK")
 
 	scenarios := []string{"simple", "json", "params"}
@@ -110,13 +111,14 @@ func runRampUpBenchmark() {
 		var fwResults []RampUpResult
 		for _, sc := range scenarios {
 			fmt.Printf("\n→ Scenario: %s\n", sc)
+			// Execute benchmark scenario for the current framework
 			srv, client := startServerHTTP2(fw, sc)
 			if srv == nil {
 				fmt.Printf("✗ FAILED to start server\n")
 				continue
 			}
 			url := "http://localhost" + srv.Addr + scenarioPathStr(sc)
-			// CPU profiling optionally enabled via env BENCH_CPU_PROFILE=1 for Celeris only
+			// CPU profiling can be enabled via env BENCH_CPU_PROFILE=1 for Celeris only
 			var profFile *os.File
 			if fw == "celeris" && os.Getenv("BENCH_CPU_PROFILE") == "1" {
 				f, err := os.Create("cpu-celeris-" + sc + ".pprof")
@@ -318,6 +320,7 @@ func rampUpTest(client *http.Client, url string, fw, sc string) RampUpResult {
 }
 
 // percentile returns the pth percentile from a slice of float64 values in nanoseconds.
+// percentile returns the pth percentile from a slice of float64 values.
 func percentile(vals []float64, p float64) float64 {
 	if len(vals) == 0 {
 		return math.NaN()
@@ -333,6 +336,7 @@ func percentile(vals []float64, p float64) float64 {
 	return vals[idx]
 }
 
+// scenarioPathStr returns the appropriate path for each benchmark scenario
 func scenarioPathStr(s string) string {
 	switch s {
 	case "simple":
@@ -346,6 +350,7 @@ func scenarioPathStr(s string) string {
 	}
 }
 
+// startServerHTTP2 initializes and starts a server for the specified framework and scenario
 func startServerHTTP2(fw, sc string) (*ServerHandle, *http.Client) {
 	switch fw {
 	case "celeris":
@@ -365,6 +370,7 @@ func startServerHTTP2(fw, sc string) (*ServerHandle, *http.Client) {
 	}
 }
 
+// startCelerisHTTP2 initializes and starts a Celeris HTTP/2 server for the specified scenario
 func startCelerisHTTP2(sc string) (*ServerHandle, *http.Client) {
 	r := celeris.NewRouter()
 	switch sc {

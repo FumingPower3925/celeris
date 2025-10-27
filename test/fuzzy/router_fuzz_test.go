@@ -8,7 +8,8 @@ import (
 	"github.com/albertbausili/celeris/pkg/celeris"
 )
 
-// FuzzRouterPaths tests router with random path inputs
+// FuzzRouterPaths tests router path matching with random inputs.
+// It verifies that the router handles various path formats safely without panicking.
 func FuzzRouterPaths(f *testing.F) {
 	// Seed corpus with interesting test cases
 	f.Add("/")

@@ -1,3 +1,4 @@
+// Package stream provides HTTP/2 stream management functionality.
 package stream
 
 import (
@@ -7,6 +8,8 @@ import (
 	"golang.org/x/net/http2"
 )
 
+// validateRequestHeaders validates HTTP/2 request headers according to RFC 7540.
+// It checks for proper pseudo-header ordering, required pseudo-headers, and forbidden headers.
 func validateRequestHeaders(headers [][2]string) error {
 	var (
 		hasMethod   bool
@@ -117,6 +120,7 @@ func validateTrailerHeaders(headers [][2]string) error {
 	return nil
 }
 
+// validateContentLength validates that the Content-Length header matches the actual body length.
 func validateContentLength(headers [][2]string, bodyLength int) error {
 	for _, h := range headers {
 		if strings.ToLower(h[0]) == "content-length" {
@@ -133,6 +137,8 @@ func validateContentLength(headers [][2]string, bodyLength int) error {
 	return nil
 }
 
+// sendStreamError sends an RST_STREAM frame with the specified error code.
+// It also attempts to flush the frame writer if it supports flushing.
 func sendStreamError(writer FrameWriter, streamID uint32, code http2.ErrCode) {
 	_ = writer.WriteRSTStream(streamID, code)
 	if flusher, ok := writer.(interface{ Flush() error }); ok {
@@ -140,6 +146,8 @@ func sendStreamError(writer FrameWriter, streamID uint32, code http2.ErrCode) {
 	}
 }
 
+// validateStreamID validates HTTP/2 stream ID according to RFC 7540 specifications.
+// It checks for reserved stream IDs, proper client/server stream ID conventions, and ordering.
 func validateStreamID(streamID uint32, lastClientStream uint32, isClient bool) error {
 	if streamID == 0 {
 		return fmt.Errorf("stream ID 0 is reserved")
@@ -158,6 +166,8 @@ func validateStreamID(streamID uint32, lastClientStream uint32, isClient bool) e
 	return nil
 }
 
+// validateStreamState validates that a frame type is allowed for the current stream state.
+// It follows the stream state transition rules defined in RFC 7540 Section 5.1.
 func validateStreamState(state State, frameType http2.FrameType, _ bool) error {
 	switch state {
 	case StateIdle:

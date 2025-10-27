@@ -17,7 +17,7 @@ import (
 	"github.com/andybalholm/brotli"
 )
 
-// LoggerConfig holds configuration for the Logger middleware.
+// LoggerConfig defines the configuration options for the Logger middleware.
 type LoggerConfig struct {
 	// Output specifies where logs are written (defaults to os.Stdout)
 	Output io.Writer
@@ -38,6 +38,7 @@ func DefaultLoggerConfig() LoggerConfig {
 }
 
 // Logger returns a middleware that logs HTTP requests with structured output.
+// By default, it logs to stdout in text format, excluding no paths.
 func Logger() Middleware {
 	return LoggerWithConfig(DefaultLoggerConfig())
 }
@@ -125,6 +126,7 @@ func LoggerWithConfig(config LoggerConfig) Middleware {
 }
 
 // Recovery returns a middleware that recovers from panics.
+// It catches panics during request handling and returns a 500 Internal Server Error response.
 func Recovery() Middleware {
 	return func(next Handler) Handler {
 		return HandlerFunc(func(ctx *Context) error {
@@ -140,6 +142,7 @@ func Recovery() Middleware {
 }
 
 // CORS returns a middleware that handles Cross-Origin Resource Sharing.
+// It sets appropriate CORS headers and handles preflight OPTIONS requests.
 func CORS(config CORSConfig) Middleware {
 	if config.AllowOrigin == "" {
 		config.AllowOrigin = "*"
@@ -195,6 +198,8 @@ func DefaultCORSConfig() CORSConfig {
 }
 
 // RequestID returns a middleware that adds a unique request ID to each request.
+// If a request ID is not already present in the headers, one is generated.
+// The request ID is added to both the context and response headers.
 func RequestID() Middleware {
 	return func(next Handler) Handler {
 		return HandlerFunc(func(ctx *Context) error {
@@ -226,6 +231,7 @@ func generateRequestID() string {
 }
 
 // Timeout returns a middleware that limits request processing time.
+// It cancels requests that exceed the specified duration with a 504 Gateway Timeout response.
 func Timeout(duration time.Duration) Middleware {
 	return func(next Handler) Handler {
 		return HandlerFunc(func(ctx *Context) error {
@@ -284,6 +290,7 @@ func DefaultCompressConfig() CompressConfig {
 }
 
 // Compress returns a middleware that compresses response bodies with gzip or brotli.
+// It uses default compression settings with a minimum response size of 1024 bytes.
 func Compress() Middleware {
 	return CompressWithConfig(DefaultCompressConfig())
 }
@@ -396,6 +403,7 @@ func CompressWithConfig(config CompressConfig) Middleware {
 }
 
 // RateLimiter returns a middleware that limits requests per second.
+// TODO: Implement rate limiting logic
 func RateLimiter(requestsPerSecond int) Middleware {
 	return func(next Handler) Handler {
 		return HandlerFunc(func(ctx *Context) error {

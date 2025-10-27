@@ -11,7 +11,7 @@ import (
 func main() {
 	router := celeris.NewRouter()
 
-	// Basic routes for testing
+	// Register basic routes for conformance testing
 	router.GET("/", func(ctx *celeris.Context) error {
 		return ctx.String(200, "hello")
 	})

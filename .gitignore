@@ -5,6 +5,7 @@ test/benchmark/http1/*.md
 test/benchmark/http2/*.csv
 test/benchmark/http2/*.json
 test/benchmark/http2/*.md
+
 # Binaries
 bin/
 *.exe
@@ -12,6 +13,14 @@ bin/
 *.dll
 *.so
 *.dylib
+
+# Ignore binaries and build artifacts without file extensions
+bench_test
+h1_test
+http2_test
+bench-rampup-h1
+bench-rampup-h2
+*.[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]
 
 # Test binary, built with `go test -c`
 *.test

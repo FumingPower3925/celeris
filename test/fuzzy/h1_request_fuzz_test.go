@@ -7,7 +7,8 @@ import (
 	"github.com/albertbausili/celeris/internal/h1"
 )
 
-// FuzzH1RequestLine fuzzes HTTP/1.1 request line parsing
+// FuzzH1RequestLine fuzzes HTTP/1.1 request line parsing with random inputs.
+// It verifies that the HTTP/1.1 parser handles various request line formats safely.
 func FuzzH1RequestLine(f *testing.F) {
 	// Seed with valid request lines
 	f.Add([]byte("GET / HTTP/1.1\r\n"))
@@ -59,7 +60,8 @@ func FuzzH1RequestLine(f *testing.F) {
 	})
 }
 
-// FuzzH1Headers fuzzes HTTP/1.1 header parsing
+// FuzzH1Headers fuzzes HTTP/1.1 header parsing with random inputs.
+// It verifies that the HTTP/1.1 parser handles various header formats safely.
 func FuzzH1Headers(f *testing.F) {
 	// Seed with valid headers
 	f.Add([]byte("GET / HTTP/1.1\r\nHost: example.com\r\nUser-Agent: test\r\n\r\n"))
@@ -115,7 +117,8 @@ func FuzzH1Headers(f *testing.F) {
 	})
 }
 
-// FuzzH1RequestFull fuzzes complete HTTP/1.1 request parsing including body
+// FuzzH1RequestFull fuzzes complete HTTP/1.1 request parsing including body content.
+// It verifies that the HTTP/1.1 parser handles full requests with various body formats safely.
 func FuzzH1RequestFull(f *testing.F) {
 	// Seed with complete requests
 	f.Add([]byte("GET / HTTP/1.1\r\nHost: example.com\r\n\r\n"))
@@ -171,7 +174,8 @@ func FuzzH1RequestFull(f *testing.F) {
 	})
 }
 
-// FuzzH1QueryParsing fuzzes query string parsing in paths
+// FuzzH1QueryParsing fuzzes query string parsing in HTTP/1.1 request paths.
+// It verifies that query parameter parsing handles various URL formats safely.
 func FuzzH1QueryParsing(f *testing.F) {
 	// Seed with various query patterns
 	f.Add("/?key=value")

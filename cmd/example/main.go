@@ -13,44 +13,46 @@ import (
 )
 
 func main() {
-	// Create router
+	// Create a new router instance
 	router := celeris.NewRouter()
 
-	// Optional minimal mode (no middleware/logging) for benchmarking
+	// Check if minimal mode is enabled for benchmarking
 	minimal := os.Getenv("EXAMPLE_MINIMAL") == "1"
 	if !minimal {
-		// Global middleware
+		// Add global middleware for recovery and logging
 		router.Use(
 			celeris.Recovery(),
 			celeris.Logger(),
 		)
 	}
 
-	// Routes
+	// Register routes
 	router.GET("/", homeHandler)
 	router.GET("/hello/:name", helloHandler)
 	router.POST("/api/data", dataHandler)
 	router.GET("/json", jsonHandler)
-	// Params route mirroring benchmark
+	// Route with multiple parameters mirroring benchmark paths
 	router.GET("/user/:userId/post/:postId", paramsHandler)
-	// Single param route for wrk quick test
+	// Simple parameter route for quick wrk tests
 	router.GET("/user/:id", userParamHandler)
 
-	// API group
+	// Create API route group
 	api := router.Group("/api/v1")
 	api.GET("/users", usersHandler)
 	api.GET("/users/:id", userHandler)
 	api.POST("/users", createUserHandler)
 
-	// Create server
+	// Configure server settings
 	config := celeris.DefaultConfig()
 	addr := os.Getenv("EXAMPLE_ADDR")
 	if addr == "" {
 		addr = ":8080"
 	}
 	config.Addr = addr
+
+	// Optimize configuration for minimal mode
 	if minimal {
-		// Silence logs and tune loops for max throughput
+		// Disable logging and optimize event loops for maximum throughput
 		config.Logger = log.New(io.Discard, "", 0)
 		cpus := runtime.GOMAXPROCS(0)
 		switch {
@@ -66,9 +68,10 @@ func main() {
 	}
 	config.Multicore = true
 
+	// Create server instance
 	server := celeris.New(config)
 
-	// Start server in goroutine
+	// Start server in a separate goroutine
 	go func() {
 		log.Printf("Starting server on %s", config.Addr)
 		if err := server.ListenAndServe(router); err != nil {
@@ -76,7 +79,7 @@ func main() {
 		}
 	}()
 
-	// Wait for interrupt signal
+	// Wait for interrupt signal to gracefully shutdown
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
@@ -84,7 +87,7 @@ func main() {
 	log.Println("Shutting down server...")
 }
 
-// homeHandler handles the home route
+// homeHandler serves the home page with example endpoints information
 func homeHandler(ctx *celeris.Context) error {
 	return ctx.HTML(200, `
 <!DOCTYPE html>
@@ -115,7 +118,7 @@ func homeHandler(ctx *celeris.Context) error {
 `)
 }
 
-// helloHandler handles the hello route
+// helloHandler returns a personalized greeting in JSON format
 func helloHandler(ctx *celeris.Context) error {
 	name := celeris.Param(ctx, "name")
 	return ctx.JSON(200, map[string]string{
@@ -125,7 +128,7 @@ func helloHandler(ctx *celeris.Context) error {
 	})
 }
 
-// dataHandler handles POST data
+// dataHandler processes POST requests with JSON data
 func dataHandler(ctx *celeris.Context) error {
 	var data map[string]interface{}
 	if err := ctx.BindJSON(&data); err != nil {
@@ -140,7 +143,7 @@ func dataHandler(ctx *celeris.Context) error {
 	})
 }
 
-// jsonHandler returns JSON data
+// jsonHandler returns server status information in JSON format
 func jsonHandler(ctx *celeris.Context) error {
 	return ctx.JSON(200, map[string]interface{}{
 		"server":  "celeris",
@@ -149,7 +152,7 @@ func jsonHandler(ctx *celeris.Context) error {
 	})
 }
 
-// paramsHandler returns params JSON
+// paramsHandler extracts and returns route parameters in JSON format
 func paramsHandler(ctx *celeris.Context) error {
 	return ctx.JSON(200, map[string]string{
 		"userId": celeris.Param(ctx, "userId"),
@@ -157,14 +160,14 @@ func paramsHandler(ctx *celeris.Context) error {
 	})
 }
 
-// userParamHandler returns single id
+// userParamHandler extracts and returns a single user ID parameter
 func userParamHandler(ctx *celeris.Context) error {
 	return ctx.JSON(200, map[string]string{
 		"id": celeris.Param(ctx, "id"),
 	})
 }
 
-// usersHandler lists users
+// usersHandler returns a list of example users
 func usersHandler(ctx *celeris.Context) error {
 	users := []map[string]interface{}{
 		{"id": 1, "name": "Alice", "email": "alice@example.com"},
@@ -178,7 +181,7 @@ func usersHandler(ctx *celeris.Context) error {
 	})
 }
 
-// userHandler gets a single user
+// userHandler returns information for a specific user by ID
 func userHandler(ctx *celeris.Context) error {
 	id := celeris.Param(ctx, "id")
 
@@ -189,7 +192,7 @@ func userHandler(ctx *celeris.Context) error {
 	})
 }
 
-// createUserHandler creates a new user
+// createUserHandler simulates creation of a new user
 func createUserHandler(ctx *celeris.Context) error {
 	var user map[string]interface{}
 	if err := ctx.BindJSON(&user); err != nil {

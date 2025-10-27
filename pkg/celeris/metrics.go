@@ -12,7 +12,7 @@ var (
 	httpRequestsTotal = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "celeris_http_requests_total",
-			Help: "Total number of HTTP requests",
+			Help: "Total number of HTTP requests processed",
 		},
 		[]string{"method", "path", "status"},
 	)
@@ -29,7 +29,7 @@ var (
 	httpRequestsInFlight = promauto.NewGauge(
 		prometheus.GaugeOpts{
 			Name: "celeris_http_requests_in_flight",
-			Help: "Current number of HTTP requests being served",
+			Help: "Current number of HTTP requests being processed",
 		},
 	)
 
@@ -43,7 +43,7 @@ var (
 	)
 )
 
-// PrometheusConfig holds configuration for Prometheus metrics middleware.
+// PrometheusConfig defines the configuration options for the Prometheus metrics middleware.
 type PrometheusConfig struct {
 	// Subsystem is the Prometheus subsystem name (default: "http")
 	Subsystem string
@@ -62,12 +62,14 @@ func DefaultPrometheusConfig() PrometheusConfig {
 	}
 }
 
-// Prometheus returns a middleware that collects Prometheus metrics.
+// Prometheus returns a middleware that collects HTTP request metrics for Prometheus.
+// It uses default configuration settings and skips metrics collection for the /metrics endpoint.
 func Prometheus() Middleware {
 	return PrometheusWithConfig(DefaultPrometheusConfig())
 }
 
-// PrometheusWithConfig returns a middleware that collects Prometheus metrics with custom configuration.
+// PrometheusWithConfig returns a middleware that collects HTTP request metrics for Prometheus.
+// It allows customization of which paths to skip and histogram buckets to use.
 func PrometheusWithConfig(config PrometheusConfig) Middleware {
 	skipMap := make(map[string]bool, len(config.SkipPaths))
 	for _, path := range config.SkipPaths {
@@ -76,7 +78,7 @@ func PrometheusWithConfig(config PrometheusConfig) Middleware {
 
 	return func(next Handler) Handler {
 		return HandlerFunc(func(ctx *Context) error {
-			// Skip metrics for specified paths
+			// Skip metrics collection for paths in the skip list
 			if skipMap[ctx.Path()] {
 				return next.ServeHTTP2(ctx)
 			}
@@ -88,7 +90,7 @@ func PrometheusWithConfig(config PrometheusConfig) Middleware {
 			// Execute handler
 			err := next.ServeHTTP2(ctx)
 
-			// Record metrics
+			// Record request metrics with labels
 			duration := time.Since(start).Seconds()
 			status := strconv.Itoa(ctx.Status())
 			method := ctx.Method()

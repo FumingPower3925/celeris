@@ -8,7 +8,8 @@ import (
 	"github.com/albertbausili/celeris/pkg/celeris"
 )
 
-// FuzzHeaders_SetGet tests header set and get operations
+// FuzzHeaders_SetGet tests header set and get operations with random inputs.
+// It verifies that setting and retrieving headers works correctly and doesn't panic.
 func FuzzHeaders_SetGet(f *testing.F) {
 	f.Add("content-type", "application/json")
 	f.Add("Content-Type", "text/html")
@@ -42,7 +43,8 @@ func FuzzHeaders_SetGet(f *testing.F) {
 	})
 }
 
-// FuzzHeaders_Del tests header deletion
+// FuzzHeaders_Del tests header deletion operations with random inputs.
+// It verifies that deleting headers works correctly and doesn't panic.
 func FuzzHeaders_Del(f *testing.F) {
 	f.Add("content-type")
 	f.Add("")
@@ -75,7 +77,8 @@ func FuzzHeaders_Del(f *testing.F) {
 	})
 }
 
-// FuzzHeaders_MultipleOperations tests complex header operations
+// FuzzHeaders_MultipleOperations tests complex header operations with multiple keys.
+// It verifies that setting multiple headers and performing various operations doesn't panic.
 func FuzzHeaders_MultipleOperations(f *testing.F) {
 	f.Add("key1", "value1", "key2", "value2")
 	f.Add("", "", "", "")
@@ -110,7 +113,8 @@ func FuzzHeaders_MultipleOperations(f *testing.F) {
 	})
 }
 
-// FuzzHeaders_SpecialCharacters tests headers with special characters
+// FuzzHeaders_SpecialCharacters tests header operations with special characters.
+// It verifies that headers with various special characters are handled safely.
 func FuzzHeaders_SpecialCharacters(f *testing.F) {
 	f.Add("header-with-dash", "value")
 	f.Add("header_with_underscore", "value")
@@ -139,7 +143,8 @@ func FuzzHeaders_SpecialCharacters(f *testing.F) {
 	})
 }
 
-// FuzzHeaders_UpdateExisting tests updating existing headers
+// FuzzHeaders_UpdateExisting tests updating existing headers with new values.
+// It verifies that header updates work correctly and the final value is properly stored.
 func FuzzHeaders_UpdateExisting(f *testing.F) {
 	f.Add("key", "value1", "value2", "value3")
 

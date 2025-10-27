@@ -8,17 +8,16 @@ import (
 	"github.com/albertbausili/celeris/pkg/celeris"
 )
 
-// Example demonstrating Server Push feature
+// main demonstrates HTTP/2 Server Push functionality with Celeris.
 func main() {
 	router := celeris.NewRouter()
 
-	// Middleware
+	// Add middleware for logging requests
 	router.Use(celeris.Logger())
 
-	// Homepage with server push for critical resources
+	// Homepage demonstrating server push for critical resources
 	router.GET("/", func(ctx *celeris.Context) error {
-		// Push critical CSS before sending HTML
-		// This allows the browser to start downloading CSS immediately
+		// Push critical CSS to allow browser to start downloading immediately
 		err := ctx.PushPromise("/static/style.css", map[string]string{
 			"content-type": "text/css",
 		})
@@ -34,7 +33,7 @@ func main() {
 			log.Printf("Push failed for app.js: %v", err)
 		}
 
-		// Push logo image
+		// Push logo image as a critical resource
 		err = ctx.PushPromise("/static/logo.png", map[string]string{
 			"content-type": "image/png",
 		})
@@ -42,7 +41,7 @@ func main() {
 			log.Printf("Push failed for logo.png: %v", err)
 		}
 
-		// Return the HTML
+		// Send HTML response with embedded resources references
 		html := `<!DOCTYPE html>
 <html>
 <head>
@@ -60,7 +59,7 @@ func main() {
 		return ctx.HTML(200, html)
 	})
 
-	// Serve the pushed CSS
+	// Serve the pushed CSS file with caching headers
 	router.GET("/static/style.css", func(ctx *celeris.Context) error {
 		css := `
 body {
@@ -83,7 +82,7 @@ img {
 		return ctx.String(200, "%s", css)
 	})
 
-	// Serve the pushed JavaScript
+	// Serve the pushed JavaScript file with caching headers
 	router.GET("/static/app.js", func(ctx *celeris.Context) error {
 		js := `
 console.log('Celeris Server Push Example');
@@ -98,7 +97,7 @@ document.addEventListener('DOMContentLoaded', function() {
 		return ctx.String(200, "%s", js)
 	})
 
-	// Serve the pushed logo (placeholder)
+	// Serve the pushed logo image (placeholder in this example)
 	router.GET("/static/logo.png", func(ctx *celeris.Context) error {
 		ctx.SetHeader("content-type", "image/png")
 		ctx.SetHeader("cache-control", "max-age=3600")
@@ -106,7 +105,7 @@ document.addEventListener('DOMContentLoaded', function() {
 		return ctx.String(200, "PNG_IMAGE_DATA_HERE")
 	})
 
-	// Example with conditional push
+	// Dashboard route with conditional server push
 	router.GET("/dashboard", func(ctx *celeris.Context) error {
 		// Only push if client supports it
 		resources := []string{
@@ -118,7 +117,7 @@ document.addEventListener('DOMContentLoaded', function() {
 		for _, resource := range resources {
 			if err := ctx.PushPromise(resource, nil); err != nil {
 				// Client might not support push or it's disabled
-				// This is not a fatal error - client will request normally
+				// Log the error but continue as client will request normally
 				log.Printf("Push not available for %s: %v", resource, err)
 			}
 		}
@@ -126,7 +125,7 @@ document.addEventListener('DOMContentLoaded', function() {
 		return ctx.HTML(200, "<html><body><h1>Dashboard</h1></body></html>")
 	})
 
-	// Start server
+	// Configure and start server
 	config := celeris.DefaultConfig()
 	config.Addr = ":8080"
 

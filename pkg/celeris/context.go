@@ -107,6 +107,7 @@ func (h *Headers) Del(key string) {
 		if idx, ok := h.index[lowerKey]; ok {
 			h.headers = append(h.headers[:idx], h.headers[idx+1:]...)
 			delete(h.index, lowerKey)
+			// Update indices for remaining headers
 			for i := idx; i < len(h.headers); i++ {
 				h.index[h.headers[i][0]] = i
 			}
@@ -387,6 +388,7 @@ func (c *Context) Redirect(status int, url string) error {
 	return c.flush()
 }
 
+// flush sends the response headers and body to the client.
 func (c *Context) flush() error {
 	if c.writeResponse == nil {
 		return fmt.Errorf("no write response function")
@@ -413,6 +415,7 @@ func (c *Context) flush() error {
 }
 
 // flushWithBody writes the provided body directly, avoiding copying into responseBody.
+// flushWithBody writes the provided body directly to the response.
 func (c *Context) flushWithBody(body []byte) error {
 	if c.writeResponse == nil {
 		return fmt.Errorf("no write response function")

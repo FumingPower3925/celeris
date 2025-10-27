@@ -1,4 +1,5 @@
 // Package transport provides HTTP/2 server transport implementation using gnet.
+// It handles the low-level HTTP/2 protocol details and integrates with the gnet event-driven model.
 package transport
 
 import (
@@ -19,7 +20,8 @@ import (
 	"golang.org/x/net/http2"
 )
 
-// verboseLogging controls hot-path logging; keep false for performance runs.
+// verboseLogging controls hot-path logging for performance-sensitive operations.
+// Keep false for production runs to avoid performance overhead.
 const verboseLogging = false
 
 const (
@@ -27,7 +29,8 @@ const (
 	http2Preface = "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"
 )
 
-// Server implements the gnet.EventHandler interface for HTTP/2
+// Server implements the gnet.EventHandler interface for HTTP/2 connections.
+// It manages the lifecycle of HTTP/2 connections and streams.
 type Server struct {
 	gnet.BuiltinEventEngine
 	handler       stream.Handler
@@ -44,13 +47,14 @@ type Server struct {
 	activeConnsMu sync.Mutex  // Protects activeConns
 }
 
-// headersSlicePool reuses small header slices to reduce allocations per response.
+// headersSlicePool reuses small header slices to reduce memory allocations per response.
+// This optimization helps minimize garbage collection pressure.
 var headersSlicePool = sync.Pool{New: func() any {
 	s := make([][2]string, 0, 8)
 	return &s
 }}
 
-// Config holds server configuration
+// Config defines the configuration options for the HTTP/2 transport server.
 type Config struct {
 	Addr                 string
 	Multicore            bool
@@ -60,7 +64,8 @@ type Config struct {
 	MaxConcurrentStreams uint32
 }
 
-// NewServer creates a new HTTP/2 server with gnet transport
+// NewServer creates a new HTTP/2 server with gnet transport engine.
+// It initializes the server with the provided handler and configuration.
 func NewServer(handler stream.Handler, config Config) *Server {
 	ctx, cancel := context.WithCancel(context.Background())
 

@@ -1,3 +1,4 @@
+// Package stream provides HTTP/2 stream management functionality.
 package stream
 
 import (
@@ -11,10 +12,10 @@ import (
 	"golang.org/x/net/http2/hpack"
 )
 
-// State represents the state of an HTTP/2 stream
+// State represents the state of an HTTP/2 stream as defined in RFC 7540.
 type State int
 
-// HTTP/2 stream states per RFC 7540
+// HTTP/2 stream states per RFC 7540 Section 5.1.
 const (
 	StateIdle State = iota
 	StateOpen
@@ -23,19 +24,19 @@ const (
 	StateClosed
 )
 
-// Phase represents the response phase for a stream (for write ordering).
+// Phase represents the response phase for a stream to ensure proper write ordering.
 type Phase int
 
 const (
 	// PhaseInit indicates no response has been sent yet.
 	PhaseInit Phase = iota
-	// PhaseHeadersSent indicates HEADERS have been flushed.
+	// PhaseHeadersSent indicates HEADERS frame has been flushed.
 	PhaseHeadersSent
-	// PhaseBody indicates response body is being sent.
+	// PhaseBody indicates response body data is being sent.
 	PhaseBody
 )
 
-// Stream represents an HTTP/2 stream
+// Stream represents an HTTP/2 stream with its associated state and data.
 type Stream struct {
 	ID                     uint32
 	State                  State

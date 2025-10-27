@@ -1,4 +1,4 @@
-// Package main demonstrates all the features of the Celeris HTTP/2 framework
+// Package main demonstrates the features of the Celeris HTTP/2 framework.
 package main
 
 import (
@@ -12,10 +12,10 @@ import (
 )
 
 func main() {
-	// Create router with all new features
+	// Create a new router instance with all features enabled
 	router := celeris.NewRouter()
 
-	// 1. Logger middleware (structured logging)
+	// 1. Logger middleware with structured logging
 	logConfig := celeris.LoggerConfig{
 		Output:    os.Stdout,
 		Format:    "json", // or "text"
@@ -23,13 +23,13 @@ func main() {
 	}
 	router.Use(celeris.LoggerWithConfig(logConfig))
 
-	// 2. Recovery middleware
+	// 2. Recovery middleware for panic handling
 	router.Use(celeris.Recovery())
 
-	// 3. Request ID middleware
+	// 3. Request ID middleware for request tracing
 	router.Use(celeris.RequestID())
 
-	// 4. Compression middleware (gzip + brotli)
+	// 4. Compression middleware supporting gzip and brotli
 	compressConfig := celeris.CompressConfig{
 		Level:         6,
 		MinSize:       1024,
@@ -37,16 +37,16 @@ func main() {
 	}
 	router.Use(celeris.CompressWithConfig(compressConfig))
 
-	// 5. Prometheus metrics middleware
+	// 5. Prometheus metrics middleware for monitoring
 	router.Use(celeris.Prometheus())
 
-	// 6. OpenTelemetry tracing middleware
+	// 6. OpenTelemetry tracing middleware for distributed tracing
 	router.Use(celeris.Tracing())
 
-	// 7. CORS middleware
+	// 7. CORS middleware with default configuration
 	router.Use(celeris.CORS(celeris.DefaultCORSConfig()))
 
-	// Basic routes
+	// Register basic routes
 	router.GET("/", func(ctx *celeris.Context) error {
 		return ctx.JSON(200, map[string]string{
 			"message": "Welcome to Celeris Features Demo",
@@ -54,12 +54,12 @@ func main() {
 		})
 	})
 
-	// Health check (skipped by logger and metrics)
+	// Health check endpoint (skipped by logger and metrics middleware)
 	router.GET("/health", func(ctx *celeris.Context) error {
 		return ctx.JSON(200, map[string]string{"status": "ok"})
 	})
 
-	// Query parameter parsing
+	// Query parameter parsing example
 	router.GET("/search", func(ctx *celeris.Context) error {
 		q := ctx.Query("q")
 		page, _ := ctx.QueryInt("page")
@@ -72,7 +72,7 @@ func main() {
 		})
 	})
 
-	// Cookie handling
+	// Cookie handling examples
 	router.GET("/set-cookie", func(ctx *celeris.Context) error {
 		ctx.SetHeader("set-cookie", "session=abc123; Path=/; HttpOnly")
 		return ctx.String(200, "Cookie set")
@@ -85,7 +85,7 @@ func main() {
 		})
 	})
 
-	// Form handling
+	// Form handling example
 	router.POST("/form", func(ctx *celeris.Context) error {
 		name, _ := ctx.FormValue("name")
 		email, _ := ctx.FormValue("email")
@@ -96,7 +96,7 @@ func main() {
 		})
 	})
 
-	// URL parameters
+	// URL parameter extraction example
 	router.GET("/users/:id", func(ctx *celeris.Context) error {
 		id := ctx.Param("id")
 		return ctx.JSON(200, map[string]interface{}{
@@ -105,17 +105,17 @@ func main() {
 		})
 	})
 
-	// Static file serving
+	// Static file serving from ./static directory
 	router.Static("/static", "./static")
 
-	// File download
+	// File download with attachment headers
 	router.GET("/download/:filename", func(ctx *celeris.Context) error {
 		filename := ctx.Param("filename")
 		// In production, validate and sanitize filename
 		return ctx.Attachment(filename, "./files/"+filename)
 	})
 
-	// Streaming response
+	// Streaming response example
 	router.GET("/stream", func(ctx *celeris.Context) error {
 		ctx.SetHeader("content-type", "text/plain")
 		ctx.SetStatus(200)
@@ -130,7 +130,7 @@ func main() {
 		return nil
 	})
 
-	// Server-Sent Events (SSE)
+	// Server-Sent Events (SSE) example
 	router.GET("/events", func(ctx *celeris.Context) error {
 		ctx.SetHeader("content-type", "text/event-stream")
 		ctx.SetHeader("cache-control", "no-cache")
@@ -153,7 +153,7 @@ func main() {
 		return nil
 	})
 
-	// Error handling with HTTPError
+	// Error handling with HTTPError example
 	router.GET("/error", func(_ *celeris.Context) error {
 		return celeris.NewHTTPError(400, "Bad Request").WithDetails(map[string]string{
 			"field": "username",
@@ -161,20 +161,20 @@ func main() {
 		})
 	})
 
-	// Custom error handler
+	// Custom error handler registration
 	router.ErrorHandler(func(ctx *celeris.Context, err error) error {
 		log.Printf("Error occurred: %v", err)
 		return celeris.DefaultErrorHandler(ctx, err)
 	})
 
-	// Prometheus metrics endpoint (standard HTTP handler)
-	// Note: This would need a wrapper, for now just document it
+	// Prometheus metrics endpoint
+	// Note: This requires a wrapper for standard HTTP handler, just documenting for now
 	router.GET("/metrics", func(ctx *celeris.Context) error {
 		// In production, you'd expose promhttp.Handler() via a wrapper
 		return ctx.String(200, "Prometheus metrics at /metrics (use standard HTTP client)")
 	})
 
-	// Create server with custom config
+	// Create server instance with custom configuration
 	config := celeris.Config{
 		Addr:                 ":8080",
 		Multicore:            true,

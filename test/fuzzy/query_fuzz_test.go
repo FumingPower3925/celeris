@@ -8,7 +8,8 @@ import (
 	"github.com/albertbausili/celeris/pkg/celeris"
 )
 
-// FuzzQueryParsing tests query parameter parsing with random inputs
+// FuzzQueryParsing tests query parameter parsing with random path inputs.
+// It verifies that the Context.Query methods handle various query string formats safely.
 func FuzzQueryParsing(f *testing.F) {
 	// Seed corpus
 	f.Add("/search?q=test")
@@ -48,7 +49,8 @@ func FuzzQueryParsing(f *testing.F) {
 	})
 }
 
-// FuzzCookieParsing tests cookie parsing with random inputs
+// FuzzCookieParsing tests HTTP cookie parsing with random header inputs.
+// It verifies that the Context.Cookie method handles various cookie formats safely.
 func FuzzCookieParsing(f *testing.F) {
 	// Seed corpus
 	f.Add("session=abc123")
@@ -80,7 +82,8 @@ func FuzzCookieParsing(f *testing.F) {
 	})
 }
 
-// FuzzSSEData tests SSE event formatting with random data
+// FuzzSSEData tests Server-Sent Events formatting with random data inputs.
+// It verifies that the Context.SSE method handles various event data safely.
 func FuzzSSEData(f *testing.F) {
 	// Seed corpus
 	f.Add("simple data")

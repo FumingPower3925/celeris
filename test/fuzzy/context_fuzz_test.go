@@ -9,7 +9,8 @@ import (
 	"github.com/albertbausili/celeris/pkg/celeris"
 )
 
-// FuzzContextJSON tests JSON encoding with random data
+// FuzzContextJSON tests JSON encoding and decoding with random data inputs.
+// It verifies that the Context.JSON method handles various JSON structures correctly without panicking.
 func FuzzContextJSON(f *testing.F) {
 	f.Add(`{"key":"value"}`)
 	f.Add(`{"number":123}`)
@@ -39,7 +40,8 @@ func FuzzContextJSON(f *testing.F) {
 	})
 }
 
-// FuzzContextString tests string responses with random input
+// FuzzContextString tests string response handling with random input.
+// It verifies that the Context.String method handles various string inputs correctly.
 func FuzzContextString(f *testing.F) {
 	f.Add("simple string")
 	f.Add("")
@@ -61,7 +63,8 @@ func FuzzContextString(f *testing.F) {
 	})
 }
 
-// FuzzHeaderOperations tests header manipulation
+// FuzzHeaderOperations tests header manipulation with random inputs.
+// It verifies that Headers.Set, Headers.Get, and Headers.Del operations are safe.
 func FuzzHeaderOperations(f *testing.F) {
 	f.Add("Content-Type", "application/json")
 	f.Add("", "")
@@ -90,7 +93,8 @@ func FuzzHeaderOperations(f *testing.F) {
 	})
 }
 
-// FuzzStatusCodes tests various status codes
+// FuzzStatusCodes tests various HTTP status codes with random inputs.
+// It verifies that setting status codes doesn't cause panics or unexpected behavior.
 func FuzzStatusCodes(f *testing.F) {
 	f.Add(200)
 	f.Add(404)
