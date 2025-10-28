@@ -616,13 +616,24 @@ func (p *Processor) handleSettings(f *http2.SettingsFrame) error {
 			p.manager.initialWindowSize = s.Val
 
 			// Adjust all existing stream windows (RFC 7540 Section 6.9.2)
-			for _, stream := range p.manager.streams {
+			streamsToFlush := make([]uint32, 0)
+			for sid, stream := range p.manager.streams {
 				stream.mu.Lock()
+				oldWin := stream.WindowSize
 				// Allow negative windows per 6.9.2; senders must not send until >=0
 				stream.WindowSize += delta
+				newWin := stream.WindowSize
 				stream.mu.Unlock()
+				// If window became positive (or more positive), we might be able to send buffered data
+				if newWin > 0 && (oldWin <= 0 || delta > 0) {
+					streamsToFlush = append(streamsToFlush, sid)
+				}
 			}
 			p.manager.mu.Unlock()
+			// Flush streams that might now be able to send (outside the lock)
+			for _, sid := range streamsToFlush {
+				p.flushBufferedData(sid)
+			}
 		case http2.SettingMaxFrameSize:
 			// Must be between 2^14 (16384) and 2^24-1 (16777215)
 			if s.Val < 16384 {
@@ -1120,7 +1131,16 @@ func (p *Processor) handleWindowUpdate(f *http2.WindowUpdateFrame) error {
 		}
 		//nolint:gosec // G115: safe conversion, newWindow validated <= 2^31-1 above
 		p.manager.connectionWindow = int32(newWindow)
+		// Snapshot stream IDs while holding lock
+		streamIDs := make([]uint32, 0, len(p.manager.streams))
+		for id := range p.manager.streams {
+			streamIDs = append(streamIDs, id)
+		}
 		p.manager.mu.Unlock()
+		// Attempt to flush buffered data for all streams now that connection window increased
+		for _, sid := range streamIDs {
+			p.flushBufferedData(sid)
+		}
 	} else {
 		// Stream-level window update
 		stream, ok := p.manager.GetStream(f.StreamID)
@@ -1174,6 +1194,8 @@ func (p *Processor) handleWindowUpdate(f *http2.WindowUpdateFrame) error {
 }
 
 // flushBufferedData attempts to send any buffered outbound data for a stream
+//
+//nolint:gocyclo // Flow control and micro-batching requires complex window management per RFC 7540
 func (p *Processor) flushBufferedData(streamID uint32) {
 	s, ok := p.manager.GetStream(streamID)
 	if !ok || s.OutboundBuffer == nil {

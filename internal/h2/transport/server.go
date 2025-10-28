@@ -923,13 +923,11 @@ func (c *Connection) sendServerPreface() error {
 	}
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
-	// Prefer larger frames inbound and larger inbound window to reduce syscall pressure.
-	// Increase HPACK table size to improve header compression for repeated fields
 	settings := []http2.Setting{
-		{ID: http2.SettingHeaderTableSize, Val: 16384},
+		{ID: http2.SettingHeaderTableSize, Val: 4096}, // Explicit HPACK dynamic table size
 		{ID: http2.SettingMaxConcurrentStreams, Val: c.processor.GetManager().GetMaxConcurrentStreams()},
-		{ID: http2.SettingMaxFrameSize, Val: 65535},        // allow peer to send larger frames to us
-		{ID: http2.SettingInitialWindowSize, Val: 1 << 20}, // 1MB inbound window per stream
+		{ID: http2.SettingMaxFrameSize, Val: 16384},
+		{ID: http2.SettingInitialWindowSize, Val: 65535},
 	}
 	if err := c.writer.WriteSettings(settings...); err != nil {
 		if verboseLogging {
@@ -1005,8 +1003,6 @@ func (c *Connection) IsShuttingDown() bool {
 //
 //nolint:gocyclo // Flow control and frame ordering requires complex window management per RFC 7540
 func (c *Connection) WriteResponse(streamID uint32, status int, headers [][2]string, body []byte) error {
-	// hot path: avoid logging to reduce allocations
-
 	// Check if we've sent GOAWAY - don't send any more responses
 	if c.sentGoAway.Load() {
 		// avoid logging in hot path
@@ -1064,7 +1060,18 @@ func (c *Connection) WriteResponse(streamID uint32, status int, headers [][2]str
 				maxFrame = 16384
 			}
 			remaining := body
-			for len(remaining) > 0 && connWin > 0 && streamWin > 0 && maxFrame > 0 {
+			// Always enter loop to handle buffering even when windows are non-positive
+			for len(remaining) > 0 {
+				// Check windows and buffer if necessary
+				if connWin <= 0 || streamWin <= 0 || maxFrame == 0 {
+					// Cannot send now; buffer remaining data
+					if s, ok := c.processor.GetManager().GetStream(streamID); ok && s.OutboundBuffer != nil {
+						_, _ = s.OutboundBuffer.Write(remaining)
+						// Don't set OutboundEndStream here; headers already sent separately
+					}
+					break
+				}
+
 				allow := int(connWin)
 				if int(streamWin) < allow {
 					allow = int(streamWin)
@@ -1173,7 +1180,18 @@ func (c *Connection) WriteResponse(streamID uint32, status int, headers [][2]str
 				maxFrame = 16384
 			}
 			remaining := body
-			for len(remaining) > 0 && connWin > 0 && streamWin > 0 && maxFrame > 0 {
+			// Always enter loop to handle buffering even when windows are non-positive
+			for len(remaining) > 0 {
+				// Check windows and buffer if necessary
+				if connWin <= 0 || streamWin <= 0 || maxFrame == 0 {
+					// Cannot send now; buffer remaining data
+					if s, ok := c.processor.GetManager().GetStream(streamID); ok && s.OutboundBuffer != nil {
+						_, _ = s.OutboundBuffer.Write(remaining)
+						s.OutboundEndStream = endStream
+					}
+					break
+				}
+
 				allow := int(connWin)
 				if int(streamWin) < allow {
 					allow = int(streamWin)
