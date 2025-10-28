@@ -1505,6 +1505,13 @@ func (p *Processor) handlePriority(f *http2.PriorityFrame) error {
 		return fmt.Errorf("stream %d depends on itself", f.StreamID)
 	}
 
+	// Check if stream exists, create if it doesn't (PRIORITY can be sent on idle streams per RFC 7540)
+	_, exists := p.manager.GetStream(f.StreamID)
+	if !exists {
+		stream := p.manager.GetOrCreateStream(f.StreamID)
+		stream.SetState(StateIdle)
+	}
+
 	p.manager.priorityTree.UpdateFromFrame(
 		f.StreamID,
 		f.StreamDep,
