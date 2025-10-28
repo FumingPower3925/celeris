@@ -1005,7 +1005,7 @@ func (c *Connection) IsShuttingDown() bool {
 func (c *Connection) WriteResponse(streamID uint32, status int, headers [][2]string, body []byte) error {
 	// Check if we've sent GOAWAY - don't send any more responses
 	if c.sentGoAway.Load() {
-		// avoid logging in hot path
+		c.logger.Printf("WriteResponse sid=%d aborted - connection closing", streamID)
 		return fmt.Errorf("connection closing")
 	}
 
