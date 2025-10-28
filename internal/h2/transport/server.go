@@ -1179,50 +1179,67 @@ func (c *Connection) WriteResponse(streamID uint32, status int, headers [][2]str
 			if maxFrame == 0 {
 				maxFrame = 16384
 			}
-			remaining := body
-			// Always enter loop to handle buffering even when windows are non-positive
-			for len(remaining) > 0 {
-				// Check windows and buffer if necessary
-				if connWin <= 0 || streamWin <= 0 || maxFrame == 0 {
-					// Cannot send now; buffer remaining data
-					if s, ok := c.processor.GetManager().GetStream(streamID); ok && s.OutboundBuffer != nil {
-						_, _ = s.OutboundBuffer.Write(remaining)
-						s.OutboundEndStream = endStream
-					}
-					break
-				}
 
-				allow := int(connWin)
-				if int(streamWin) < allow {
-					allow = int(streamWin)
-				}
-				if int(maxFrame) < allow {
-					allow = int(maxFrame)
-				}
-				if allow <= 0 {
-					break
-				}
-				if allow > len(remaining) {
-					allow = len(remaining)
-				}
-				chunk := remaining[:allow]
-				remaining = remaining[allow:]
-				end := len(remaining) == 0 // endStream on final chunk
-				if err := c.writer.WriteData(streamID, end, chunk); err != nil {
+			// Fast path for very small bodies that fit in a single frame
+			if len(body) <= int(maxFrame) && len(body) <= int(connWin) && len(body) <= int(streamWin) {
+				// Single frame send - most common case for JSON responses
+				if err := c.writer.WriteData(streamID, true, body); err != nil {
+					c.writeMu.Unlock()
 					return err
 				}
-				//nolint:gosec // bounded by windows
-				c.processor.GetManager().ConsumeSendWindow(streamID, int32(len(chunk)))
-				connWin, streamWin, maxFrame = c.processor.GetManager().GetSendWindowsAndMaxFrame(streamID)
-				if maxFrame == 0 {
-					maxFrame = 16384
+				//nolint:gosec // G115: safe conversion; body length is bounded by flow control windows
+				c.processor.GetManager().ConsumeSendWindow(streamID, int32(len(body)))
+				if st, ok := c.processor.GetManager().GetStream(streamID); ok {
+					st.SetState(stream.StateClosed)
 				}
-				if end {
-					if st, ok := c.processor.GetManager().GetStream(streamID); ok {
-						if st.EndStream {
-							st.SetState(stream.StateClosed)
-						} else {
-							st.SetState(stream.StateHalfClosedLocal)
+			} else {
+				// Multi-frame path for larger bodies
+				remaining := body
+				// Always enter loop to handle buffering even when windows are non-positive
+				for len(remaining) > 0 {
+					// Check windows and buffer if necessary
+					if connWin <= 0 || streamWin <= 0 || maxFrame == 0 {
+						// Cannot send now; buffer remaining data
+						if s, ok := c.processor.GetManager().GetStream(streamID); ok && s.OutboundBuffer != nil {
+							_, _ = s.OutboundBuffer.Write(remaining)
+							s.OutboundEndStream = endStream
+						}
+						break
+					}
+
+					allow := int(connWin)
+					if int(streamWin) < allow {
+						allow = int(streamWin)
+					}
+					if int(maxFrame) < allow {
+						allow = int(maxFrame)
+					}
+					if allow <= 0 {
+						break
+					}
+					if allow > len(remaining) {
+						allow = len(remaining)
+					}
+					chunk := remaining[:allow]
+					remaining = remaining[allow:]
+					end := len(remaining) == 0 // endStream on final chunk
+					if err := c.writer.WriteData(streamID, end, chunk); err != nil {
+						c.writeMu.Unlock()
+						return err
+					}
+					//nolint:gosec // bounded by windows
+					c.processor.GetManager().ConsumeSendWindow(streamID, int32(len(chunk)))
+					connWin, streamWin, maxFrame = c.processor.GetManager().GetSendWindowsAndMaxFrame(streamID)
+					if maxFrame == 0 {
+						maxFrame = 16384
+					}
+					if end {
+						if st, ok := c.processor.GetManager().GetStream(streamID); ok {
+							if st.EndStream {
+								st.SetState(stream.StateClosed)
+							} else {
+								st.SetState(stream.StateHalfClosedLocal)
+							}
 						}
 					}
 				}

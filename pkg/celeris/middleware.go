@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -255,7 +256,32 @@ func Timeout(duration time.Duration) Middleware {
 				time.Sleep(10 * time.Millisecond)
 				// Only send timeout response if handler hasn't responded yet
 				if !responded.Load() {
-					return ctx.String(504, "Gateway Timeout")
+					// Use a new context to avoid race conditions
+					timeoutCtx := &Context{
+						StreamID:        ctx.StreamID,
+						headers:         ctx.headers,
+						body:            ctx.body,
+						statusCode:      504,
+						responseHeaders: NewHeaders(),
+						responseBody:    responseBufPool.Get().(*bytes.Buffer),
+						stream:          ctx.stream,
+						ctx:             ctx.ctx,
+						writeResponse:   ctx.writeResponse,
+						pushPromise:     ctx.pushPromise,
+						values:          nil,
+						hasFlushed:      false,
+						streamBuffer:    nil,
+						method:          ctx.method,
+						path:            ctx.path,
+						scheme:          ctx.scheme,
+						authority:       ctx.authority,
+						writeMu:         sync.Mutex{},
+					}
+					defer func() {
+						timeoutCtx.responseBody.Reset()
+						responseBufPool.Put(timeoutCtx.responseBody)
+					}()
+					return timeoutCtx.String(504, "Gateway Timeout")
 				}
 				// Handler finished just in time, return its error
 				return <-done
