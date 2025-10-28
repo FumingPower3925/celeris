@@ -3,6 +3,7 @@ package celeris
 import (
 	"context"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -616,5 +617,528 @@ func TestCompressWithConfig_ExcludedType(t *testing.T) {
 	encoding := ctx.responseHeaders.Get("content-encoding")
 	if encoding != "" {
 		t.Errorf("Expected no compression for excluded type, got %s", encoding)
+	}
+}
+
+// Tests for Rate Limiter middleware
+func TestRateLimiterMiddleware_Basic(t *testing.T) {
+	// Create a simple handler
+	handler := HandlerFunc(func(ctx *Context) error {
+		return ctx.JSON(200, map[string]string{"message": "success"})
+	})
+
+	// Create rate limiter middleware (1 request per second)
+	middleware := RateLimiter(1)
+	wrappedHandler := middleware(handler)
+
+	// Create test context with proper setup
+	s := stream.NewStream(1)
+	s.AddHeader(":method", "GET")
+	s.AddHeader(":path", "/test")
+	s.AddHeader(":authority", "localhost:8080")
+
+	// Add mock write response function
+	writeResponseFunc := func(_ uint32, _ int, _ [][2]string, _ []byte) error {
+		return nil
+	}
+	ctx := newContext(context.Background(), s, writeResponseFunc)
+
+	// First request should succeed
+	err := wrappedHandler.ServeHTTP2(ctx)
+	if err != nil {
+		t.Errorf("First request should succeed, got error: %v", err)
+	}
+
+	// Check that rate limit headers are set
+	limit := ctx.responseHeaders.Get("x-ratelimit-limit")
+	if limit != "1" {
+		t.Errorf("Expected x-ratelimit-limit header to be 1, got %s", limit)
+	}
+
+	// Test that middleware executes without error
+	// Note: Rate limiting behavior is tested in integration tests
+	// where we can properly test the actual limiting mechanism
+}
+
+func TestRateLimiterMiddleware_SkipPaths(t *testing.T) {
+	config := RateLimiterConfig{
+		RequestsPerSecond: 1,
+		SkipPaths:         []string{"/health"},
+	}
+	middleware := RateLimiterWithConfig(config)
+	handler := HandlerFunc(func(ctx *Context) error {
+		return ctx.JSON(200, map[string]string{"message": "success"})
+	})
+	wrappedHandler := middleware(handler)
+
+	// Test skipped path
+	s := stream.NewStream(1)
+	s.AddHeader(":method", "GET")
+	s.AddHeader(":path", "/health")
+	s.AddHeader(":authority", "localhost:8080")
+
+	writeResponseFunc := func(_ uint32, _ int, _ [][2]string, _ []byte) error {
+		return nil
+	}
+	ctx := newContext(context.Background(), s, writeResponseFunc)
+
+	err := wrappedHandler.ServeHTTP2(ctx)
+	if err != nil {
+		t.Errorf("Skipped path should not be rate limited, got error: %v", err)
+	}
+
+	if ctx.statusCode == 429 {
+		t.Error("Skipped path should not be rate limited")
+	}
+}
+
+func TestRateLimiterMiddleware_CustomKeyFunc(t *testing.T) {
+	config := RateLimiterConfig{
+		RequestsPerSecond: 1,
+		KeyFunc: func(_ *Context) string {
+			return "custom-key"
+		},
+	}
+	middleware := RateLimiterWithConfig(config)
+	handler := HandlerFunc(func(ctx *Context) error {
+		return ctx.JSON(200, map[string]string{"message": "success"})
+	})
+	wrappedHandler := middleware(handler)
+
+	// Test that middleware executes without error
+	s := stream.NewStream(1)
+	s.AddHeader(":method", "GET")
+	s.AddHeader(":path", "/test")
+	s.AddHeader(":authority", "localhost:8080")
+
+	writeResponseFunc := func(_ uint32, _ int, _ [][2]string, _ []byte) error {
+		return nil
+	}
+	ctx := newContext(context.Background(), s, writeResponseFunc)
+
+	err := wrappedHandler.ServeHTTP2(ctx)
+	if err != nil {
+		t.Errorf("Request should succeed, got error: %v", err)
+	}
+
+	// Check that rate limit headers are set
+	limit := ctx.responseHeaders.Get("x-ratelimit-limit")
+	if limit != "1" {
+		t.Errorf("Expected x-ratelimit-limit header to be 1, got %s", limit)
+	}
+}
+
+// Tests for Health middleware
+func TestHealthMiddleware_Default(t *testing.T) {
+	middleware := Health()
+	handler := HandlerFunc(func(ctx *Context) error {
+		return ctx.JSON(200, map[string]string{"message": "test"})
+	})
+	wrappedHandler := middleware(handler)
+
+	// Test health endpoint
+	s := stream.NewStream(1)
+	s.AddHeader(":method", "GET")
+	s.AddHeader(":path", "/health")
+
+	writeResponseFunc := func(_ uint32, _ int, _ [][2]string, _ []byte) error {
+		return nil
+	}
+	ctx := newContext(context.Background(), s, writeResponseFunc)
+
+	err := wrappedHandler.ServeHTTP2(ctx)
+	if err != nil {
+		t.Errorf("Health endpoint should work, got error: %v", err)
+	}
+
+	if ctx.statusCode != 200 {
+		t.Errorf("Expected status 200, got %d", ctx.statusCode)
+	}
+
+	// Test that middleware executes without error
+	// Note: Full health response testing is done in integration tests
+}
+
+func TestHealthMiddleware_CustomHandler(t *testing.T) {
+	config := HealthConfig{
+		Path: "/custom-health",
+		Handler: func(ctx *Context) error {
+			return ctx.JSON(200, map[string]interface{}{
+				"status":    "healthy",
+				"service":   "test-service",
+				"timestamp": time.Now().Unix(),
+			})
+		},
+	}
+	middleware := HealthWithConfig(config)
+	handler := HandlerFunc(func(ctx *Context) error {
+		return ctx.JSON(200, map[string]string{"message": "test"})
+	})
+	wrappedHandler := middleware(handler)
+
+	// Test custom health endpoint
+	s := stream.NewStream(1)
+	s.AddHeader(":method", "GET")
+	s.AddHeader(":path", "/custom-health")
+
+	writeResponseFunc := func(_ uint32, _ int, _ [][2]string, _ []byte) error {
+		return nil
+	}
+	ctx := newContext(context.Background(), s, writeResponseFunc)
+
+	err := wrappedHandler.ServeHTTP2(ctx)
+	if err != nil {
+		t.Errorf("Custom health endpoint should work, got error: %v", err)
+	}
+
+	if ctx.statusCode != 200 {
+		t.Errorf("Expected status 200, got %d", ctx.statusCode)
+	}
+}
+
+func TestHealthMiddleware_NonHealthEndpoint(t *testing.T) {
+	middleware := Health()
+	handler := HandlerFunc(func(ctx *Context) error {
+		return ctx.JSON(200, map[string]string{"message": "test"})
+	})
+	wrappedHandler := middleware(handler)
+
+	// Test non-health endpoint
+	s := stream.NewStream(1)
+	s.AddHeader(":method", "GET")
+	s.AddHeader(":path", "/test")
+
+	writeResponseFunc := func(_ uint32, _ int, _ [][2]string, _ []byte) error {
+		return nil
+	}
+	ctx := newContext(context.Background(), s, writeResponseFunc)
+
+	err := wrappedHandler.ServeHTTP2(ctx)
+	if err != nil {
+		t.Errorf("Non-health endpoint should work, got error: %v", err)
+	}
+
+	if ctx.statusCode != 200 {
+		t.Errorf("Expected status 200, got %d", ctx.statusCode)
+	}
+}
+
+// Tests for Docs middleware
+func TestDocsMiddleware_Default(t *testing.T) {
+	middleware := Docs()
+	handler := HandlerFunc(func(ctx *Context) error {
+		return ctx.JSON(200, map[string]string{"message": "test"})
+	})
+	wrappedHandler := middleware(handler)
+
+	// Test docs endpoint
+	s := stream.NewStream(1)
+	s.AddHeader(":method", "GET")
+	s.AddHeader(":path", "/docs")
+
+	writeResponseFunc := func(_ uint32, _ int, _ [][2]string, _ []byte) error {
+		return nil
+	}
+	ctx := newContext(context.Background(), s, writeResponseFunc)
+
+	err := wrappedHandler.ServeHTTP2(ctx)
+	if err != nil {
+		t.Errorf("Docs endpoint should work, got error: %v", err)
+	}
+
+	if ctx.statusCode != 200 {
+		t.Errorf("Expected status 200, got %d", ctx.statusCode)
+	}
+
+	// Check content type
+	contentType := ctx.responseHeaders.Get("content-type")
+	if contentType != "text/html; charset=utf-8" {
+		t.Errorf("Expected content-type text/html; charset=utf-8, got %s", contentType)
+	}
+}
+
+func TestDocsMiddleware_CustomConfig(t *testing.T) {
+	config := DocsConfig{
+		Path:        "/api-docs",
+		Title:       "Custom API",
+		Description: "Custom API Documentation",
+		Version:     "2.0.0",
+		ServerURL:   "https://api.example.com",
+		Routes: []RouteInfo{
+			{
+				Method:      "GET",
+				Path:        "/users",
+				Summary:     "Get users",
+				Description: "Retrieve all users",
+				Tags:        []string{"users"},
+				Parameters: []ParameterInfo{
+					{
+						Name:        "limit",
+						In:          "query",
+						Required:    false,
+						Description: "Number of users to return",
+						Type:        "integer",
+					},
+				},
+				Responses: map[string]string{
+					"200": "Success",
+					"400": "Bad Request",
+				},
+			},
+		},
+	}
+	middleware := DocsWithConfig(config)
+	handler := HandlerFunc(func(ctx *Context) error {
+		return ctx.JSON(200, map[string]string{"message": "test"})
+	})
+	wrappedHandler := middleware(handler)
+
+	// Test custom docs endpoint
+	s := stream.NewStream(1)
+	s.AddHeader(":method", "GET")
+	s.AddHeader(":path", "/api-docs")
+
+	writeResponseFunc := func(_ uint32, _ int, _ [][2]string, _ []byte) error {
+		return nil
+	}
+	ctx := newContext(context.Background(), s, writeResponseFunc)
+
+	err := wrappedHandler.ServeHTTP2(ctx)
+	if err != nil {
+		t.Errorf("Custom docs endpoint should work, got error: %v", err)
+	}
+
+	if ctx.statusCode != 200 {
+		t.Errorf("Expected status 200, got %d", ctx.statusCode)
+	}
+}
+
+func TestDocsMiddleware_NonDocsEndpoint(t *testing.T) {
+	middleware := Docs()
+	handler := HandlerFunc(func(ctx *Context) error {
+		return ctx.JSON(200, map[string]string{"message": "test"})
+	})
+	wrappedHandler := middleware(handler)
+
+	// Test non-docs endpoint
+	s := stream.NewStream(1)
+	s.AddHeader(":method", "GET")
+	s.AddHeader(":path", "/test")
+
+	writeResponseFunc := func(_ uint32, _ int, _ [][2]string, _ []byte) error {
+		return nil
+	}
+	ctx := newContext(context.Background(), s, writeResponseFunc)
+
+	err := wrappedHandler.ServeHTTP2(ctx)
+	if err != nil {
+		t.Errorf("Non-docs endpoint should work, got error: %v", err)
+	}
+
+	if ctx.statusCode != 200 {
+		t.Errorf("Expected status 200, got %d", ctx.statusCode)
+	}
+}
+
+func TestDocsMiddleware_OpenAPISpecGeneration(t *testing.T) {
+	config := DocsConfig{
+		Title:        "Test API",
+		Description:  "Test API Documentation",
+		Version:      "1.0.0",
+		ServerURL:    "http://localhost:8080",
+		ContactName:  "Test Contact",
+		ContactEmail: "test@example.com",
+		LicenseName:  "MIT",
+		LicenseURL:   "https://opensource.org/licenses/MIT",
+		Routes: []RouteInfo{
+			{
+				Method:      "GET",
+				Path:        "/users",
+				Summary:     "Get users",
+				Description: "Retrieve all users",
+				Tags:        []string{"users"},
+				Parameters: []ParameterInfo{
+					{
+						Name:        "limit",
+						In:          "query",
+						Required:    false,
+						Description: "Number of users to return",
+						Type:        "integer",
+					},
+				},
+				Responses: map[string]string{
+					"200": "Success",
+					"400": "Bad Request",
+				},
+			},
+			{
+				Method:      "POST",
+				Path:        "/users",
+				Summary:     "Create user",
+				Description: "Create a new user",
+				Tags:        []string{"users"},
+				Responses: map[string]string{
+					"201": "Created",
+					"400": "Bad Request",
+				},
+			},
+		},
+	}
+
+	spec := generateOpenAPISpec(config)
+
+	// Check basic structure
+	if spec["openapi"] != "3.0.0" {
+		t.Error("OpenAPI version should be 3.0.0")
+	}
+
+	info, ok := spec["info"].(map[string]interface{})
+	if !ok {
+		t.Fatal("Info section should be present")
+	}
+
+	if info["title"] != "Test API" {
+		t.Error("Title should match config")
+	}
+	if info["description"] != "Test API Documentation" {
+		t.Error("Description should match config")
+	}
+	if info["version"] != "1.0.0" {
+		t.Error("Version should match config")
+	}
+
+	// Check contact info
+	contact, ok := info["contact"].(map[string]interface{})
+	if !ok {
+		t.Fatal("Contact section should be present")
+	}
+	if contact["name"] != "Test Contact" {
+		t.Error("Contact name should match config")
+	}
+	if contact["email"] != "test@example.com" {
+		t.Error("Contact email should match config")
+	}
+
+	// Check license info
+	license, ok := info["license"].(map[string]interface{})
+	if !ok {
+		t.Fatal("License section should be present")
+	}
+	if license["name"] != "MIT" {
+		t.Error("License name should match config")
+	}
+	if license["url"] != "https://opensource.org/licenses/MIT" {
+		t.Error("License URL should match config")
+	}
+
+	// Check servers
+	servers, ok := spec["servers"].([]map[string]interface{})
+	if !ok {
+		t.Fatal("Servers section should be present")
+	}
+	if len(servers) != 1 {
+		t.Error("Should have one server")
+	}
+	if servers[0]["url"] != "http://localhost:8080" {
+		t.Error("Server URL should match config")
+	}
+
+	// Check paths
+	paths, ok := spec["paths"].(map[string]interface{})
+	if !ok {
+		t.Fatal("Paths section should be present")
+	}
+
+	usersPath, ok := paths["/users"].(map[string]interface{})
+	if !ok {
+		t.Fatal("Users path should be present")
+	}
+
+	getOp, ok := usersPath["get"].(map[string]interface{})
+	if !ok {
+		t.Fatal("GET operation should be present")
+	}
+	if getOp["summary"] != "Get users" {
+		t.Error("GET summary should match")
+	}
+
+	postOp, ok := usersPath["post"].(map[string]interface{})
+	if !ok {
+		t.Fatal("POST operation should be present")
+	}
+	if postOp["summary"] != "Create user" {
+		t.Error("POST summary should match")
+	}
+}
+
+// Tests for Token Bucket
+func TestTokenBucket_Basic(t *testing.T) {
+	tb := newTokenBucket(10, 5) // 10 tokens per second, burst of 5
+
+	// Should allow 5 requests immediately (burst)
+	for i := 0; i < 5; i++ {
+		if !tb.allow() {
+			t.Errorf("Request %d should be allowed (burst)", i+1)
+		}
+	}
+
+	// Next request should be denied (no more tokens)
+	if tb.allow() {
+		t.Error("Request should be denied after burst")
+	}
+}
+
+func TestTokenBucket_TokenRefill(t *testing.T) {
+	tb := newTokenBucket(10, 5) // 10 tokens per second, burst of 5
+
+	// Use all burst tokens
+	for i := 0; i < 5; i++ {
+		tb.allow()
+	}
+
+	// Wait for refill (200ms should give us 2 tokens)
+	time.Sleep(200 * time.Millisecond)
+
+	// Should allow one more request
+	if !tb.allow() {
+		t.Error("Request should be allowed after refill")
+	}
+
+	// Should allow another request
+	if !tb.allow() {
+		t.Error("Request should be allowed after refill")
+	}
+
+	// Next should be denied
+	if tb.allow() {
+		t.Error("Request should be denied after refill tokens used")
+	}
+}
+
+func TestTokenBucket_ConcurrentAccess(t *testing.T) {
+	tb := newTokenBucket(100, 10) // High rate for testing
+
+	var wg sync.WaitGroup
+	allowedCount := 0
+	var mu sync.Mutex
+
+	// Send 20 concurrent requests
+	for i := 0; i < 20; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if tb.allow() {
+				mu.Lock()
+				allowedCount++
+				mu.Unlock()
+			}
+		}()
+	}
+
+	wg.Wait()
+
+	// Should allow exactly 10 requests (burst size)
+	if allowedCount != 10 {
+		t.Errorf("Expected 10 allowed requests, got %d", allowedCount)
 	}
 }

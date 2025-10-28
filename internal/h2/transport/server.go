@@ -24,6 +24,15 @@ import (
 // Keep false for production runs to avoid performance overhead.
 const verboseLogging = false
 
+// silentGnetLogger is a logger that discards all gnet output to hide internal messages
+type silentGnetLogger struct{}
+
+func (s silentGnetLogger) Debugf(_ string, _ ...any) {}
+func (s silentGnetLogger) Infof(_ string, _ ...any)  {}
+func (s silentGnetLogger) Warnf(_ string, _ ...any)  {}
+func (s silentGnetLogger) Errorf(_ string, _ ...any) {}
+func (s silentGnetLogger) Fatalf(_ string, _ ...any) {}
+
 const (
 	// HTTP/2 connection preface
 	http2Preface = "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"
@@ -97,6 +106,8 @@ func (s *Server) Start() error {
 		gnet.WithMulticore(s.multicore),
 		gnet.WithReusePort(s.reusePort),
 		gnet.WithTCPNoDelay(gnet.TCPNoDelay),
+		// Use silent logger to hide gnet internal messages
+		gnet.WithLogger(silentGnetLogger{}),
 	}
 
 	if s.numEventLoop > 0 {

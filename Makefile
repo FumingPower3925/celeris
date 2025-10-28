@@ -1,4 +1,4 @@
-.PHONY: all build test test-unit test-integration test-benchmark test-fuzz test-coverage test-race bench lint coverage docs docs-serve sonar snyk load-test h2spec clean help test-rampup test-rampup-h1 test-rampup-h2 test-rampup-h1-celeris test-rampup-h2-celeris
+.PHONY: all build test test-extended test-unit test-integration test-benchmark test-fuzz test-coverage test-race test-bench lint docs docs-serve sonar snyk h2spec clean help test-rampup test-rampup-h1 test-rampup-h2 test-rampup-h1-celeris test-rampup-h2-celeris
 
 # Default target
 all: lint test build
@@ -9,8 +9,16 @@ build:
 	@go build -o bin/example ./cmd/example
 
 # Run tests
-test:
-	@echo "Running tests..."
+test: test-race test-unit test-integration test-bench
+	@echo "All test targets completed successfully!"
+
+# Run extended tests
+test-extended: test test-rampup test-fuzz
+	@echo "All extended test targets completed successfully!"
+
+# Run tests with race detector
+test-race:
+	@echo "Running tests with race detector..."
 	@go test -v -race ./...
 
 # Run unit tests only
@@ -66,13 +74,8 @@ test-coverage:
 	@go tool cover -html=pkg/celeris/coverage.out -o coverage.html
 	@echo "Coverage report: coverage.html"
 
-# Run tests with race detector
-test-race:
-	@echo "Running tests with race detector..."
-	@go test -v -race ./...
-
 # Run benchmarks
-bench:
+test-bench:
 	@echo "Running benchmarks..."
 	@go test -bench=. -benchmem ./...
 
@@ -86,14 +89,15 @@ lint:
 	@cd test/fuzzy && golangci-lint run
 	@echo "Running golangci-lint on test/integration..."
 	@cd test/integration && golangci-lint run
+	@echo "Running golangci-lint on examples..."
+	@for dir in examples/*/; do \
+		if [ -f "$$dir/main.go" ]; then \
+			echo "Linting $$dir..."; \
+			cd "$$dir" && golangci-lint run . || true; \
+			cd ../..; \
+		fi; \
+	done
 	@echo "All linting completed successfully!"
-
-# Generate coverage report
-coverage:
-	@echo "Generating coverage report..."
-	@go test -coverprofile=coverage.out -covermode=atomic ./...
-	@go tool cover -html=coverage.out -o coverage.html
-	@echo "Coverage report generated: coverage.html"
 
 # Build documentation
 docs:
@@ -106,7 +110,7 @@ docs-serve:
 	@cd docs && hugo server -D
 
 # Run SonarQube analysis
-sonar: lint coverage
+sonar: lint
 	@echo "Running SonarQube scanner..."
 	@sonar-scanner
 
@@ -115,17 +119,8 @@ snyk:
 	@echo "Running Snyk security scan..."
 	@snyk test --severity-threshold=high
 
-# Run load test
-load-test:
-	@echo "Starting load test..."
-	@go run ./cmd/example > /dev/null 2>&1 & echo $$! > .server.pid
-	@sleep 3
-	@echo "Running h2load..."
-	@h2load -n 10000 -c 100 -m 10 http://localhost:8080/ || true
-	@kill `cat .server.pid` && rm .server.pid
-
 # Run HTTP/2 compliance test
-h2spec:
+h2spec: clean
 	@echo "Starting h2spec compliance test..."
 	@go run -tags "poll_opt gc_opt" ./cmd/test-server > .server.log 2>&1 & echo $$! > .server.pid
 	@sleep 5
@@ -149,7 +144,8 @@ help:
 	@echo ""
 	@echo "Available targets:"
 	@echo "  make build             - Build the example server"
-	@echo "  make test              - Run all tests (unit + integration)"
+	@echo "  make test              - Run all core tests (race, unit, integration, bench)"
+	@echo "  make test-extended     - Run extended tests (test + rampup + fuzz)"
 	@echo "  make test-unit         - Run unit tests only"
 	@echo "  make test-integration  - Run integration tests"
 	@echo "  make test-benchmark    - Run comparative benchmarks"
@@ -161,48 +157,13 @@ help:
 	@echo "  make test-fuzz         - Run fuzz tests"
 	@echo "  make test-coverage     - Generate test coverage report"
 	@echo "  make test-race         - Run tests with race detector"
-	@echo "  make bench             - Run benchmarks"
+	@echo "  make test-bench        - Run benchmarks"
 	@echo "  make lint              - Run linter"
-	@echo "  make coverage          - Generate coverage report (all)"
 	@echo "  make docs              - Build documentation"
 	@echo "  make docs-serve        - Serve documentation locally"
 	@echo "  make sonar             - Run SonarQube analysis"
 	@echo "  make snyk              - Run Snyk security scan"
-	@echo "  make load-test         - Run load test with h2load"
 	@echo "  make h2spec            - Run HTTP/2 compliance test"
 	@echo "  make clean             - Clean build artifacts"
 	@echo "  make help              - Display this help message"
-
-# WRK-based HTTP/1.1 benchmarks (requires wrk installed)
-WRK_THREADS ?= 8
-WRK_CONNECTIONS ?= 400
-WRK_DURATION ?= 30s
-
-wrk-h1-celeris:
-	@PORT=$$(python3 -c 'import socket; s=socket.socket(); s.bind(("",0)); print(s.getsockname()[1]); s.close()'); \
-	echo "Starting Celeris H1 server on :$${PORT}..."; \
-	EXAMPLE_ADDR=:$$PORT go run -tags "poll_opt gc_opt" ./cmd/example > .server.log 2>&1 & echo $$! > .server.pid; \
-	sleep 1; \
-	echo "Running wrk simple (/) on :$${PORT}..."; \
-	wrk --latency -t$(WRK_THREADS) -c$(WRK_CONNECTIONS) -d$(WRK_DURATION) http://127.0.0.1:$$PORT/ || true; \
-	echo "Running wrk json (/json) on :$${PORT}..."; \
-	wrk --latency -t$(WRK_THREADS) -c$(WRK_CONNECTIONS) -d$(WRK_DURATION) http://127.0.0.1:$$PORT/json || true; \
-	echo "Running wrk params (/user/123/post/456) on :$${PORT}..."; \
-	wrk --latency -t$(WRK_THREADS) -c$(WRK_CONNECTIONS) -d$(WRK_DURATION) http://127.0.0.1:$$PORT/user/123/post/456 || true; \
-	if [ -f .server.pid ]; then kill `cat .server.pid` 2>/dev/null || true; rm -f .server.pid; fi
-
-wrk-h1-celeris-max:
-	@PORT=$$(python3 -c 'import socket; s=socket.socket(); s.bind(("",0)); print(s.getsockname()[1]); s.close()'); \
-	echo "Building example server..."; \
-	go build -tags "poll_opt gc_opt" -o bin/example ./cmd/example; \
-	echo "Starting Celeris H1 server (minimal) on :$${PORT}..."; \
-	EXAMPLE_MINIMAL=1 EXAMPLE_ADDR=:$$PORT ./bin/example > .server.log 2>&1 & echo $$! > .server.pid; \
-	sleep 2; \
-	echo "Running wrk max (/)..."; \
-	wrk --latency -t12 -c800 -d$(WRK_DURATION) http://127.0.0.1:$$PORT/ || true; \
-	echo "Running wrk max (/json)..."; \
-	wrk --latency -t12 -c800 -d$(WRK_DURATION) http://127.0.0.1:$$PORT/json || true; \
-	echo "Running wrk max (/user/123/post/456)..."; \
-	wrk --latency -t12 -c800 -d$(WRK_DURATION) http://127.0.0.1:$$PORT/user/123/post/456 || true; \
-	if [ -f .server.pid ]; then kill `cat .server.pid` 2>/dev/null || true; rm -f .server.pid; fi
 

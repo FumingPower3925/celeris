@@ -428,14 +428,549 @@ func CompressWithConfig(config CompressConfig) Middleware {
 	}
 }
 
-// RateLimiter returns a middleware that limits requests per second.
-// TODO: Implement rate limiting logic
+// RateLimiterConfig holds configuration for the RateLimiter middleware.
+type RateLimiterConfig struct {
+	// RequestsPerSecond is the maximum number of requests allowed per second
+	RequestsPerSecond int
+	// BurstSize is the maximum number of requests that can be burst at once
+	BurstSize int
+	// KeyFunc is a function that returns a unique key for rate limiting (default: uses client IP)
+	KeyFunc func(ctx *Context) string
+	// SkipPaths lists paths to skip rate limiting (e.g., health checks)
+	SkipPaths []string
+	// ErrorHandler is called when rate limit is exceeded (default: returns 429)
+	ErrorHandler func(ctx *Context) error
+}
+
+// DefaultRateLimiterConfig returns a RateLimiterConfig with sensible defaults.
+func DefaultRateLimiterConfig(requestsPerSecond int) RateLimiterConfig {
+	return RateLimiterConfig{
+		RequestsPerSecond: requestsPerSecond,
+		BurstSize:         requestsPerSecond * 2, // Allow 2x burst
+		KeyFunc: func(ctx *Context) string {
+			// Use client IP for rate limiting
+			clientIP := ctx.Header().Get("x-forwarded-for")
+			if clientIP == "" {
+				clientIP = ctx.Header().Get("x-real-ip")
+			}
+			if clientIP == "" {
+				clientIP = ctx.Authority()
+			}
+			return clientIP
+		},
+		SkipPaths: []string{"/health", "/metrics"},
+		ErrorHandler: func(ctx *Context) error {
+			ctx.SetHeader("x-ratelimit-limit", fmt.Sprintf("%d", requestsPerSecond))
+			ctx.SetHeader("x-ratelimit-remaining", "0")
+			ctx.SetHeader("retry-after", "1")
+			return ctx.String(429, "Too Many Requests")
+		},
+	}
+}
+
+// RateLimiter returns a middleware that limits requests per second using a token bucket algorithm.
 func RateLimiter(requestsPerSecond int) Middleware {
+	return RateLimiterWithConfig(DefaultRateLimiterConfig(requestsPerSecond))
+}
+
+// RateLimiterWithConfig returns a middleware that limits requests with custom configuration.
+func RateLimiterWithConfig(config RateLimiterConfig) Middleware {
+	if config.RequestsPerSecond <= 0 {
+		panic("requests per second must be positive")
+	}
+	if config.BurstSize <= 0 {
+		config.BurstSize = config.RequestsPerSecond * 2
+	}
+	if config.KeyFunc == nil {
+		config.KeyFunc = func(ctx *Context) string {
+			clientIP := ctx.Header().Get("x-forwarded-for")
+			if clientIP == "" {
+				clientIP = ctx.Header().Get("x-real-ip")
+			}
+			if clientIP == "" {
+				clientIP = ctx.Authority()
+			}
+			if clientIP == "" {
+				// Fallback for localhost connections
+				clientIP = "localhost"
+			}
+			return clientIP
+		}
+	}
+	if config.ErrorHandler == nil {
+		config.ErrorHandler = func(ctx *Context) error {
+			ctx.SetHeader("x-ratelimit-limit", fmt.Sprintf("%d", config.RequestsPerSecond))
+			ctx.SetHeader("x-ratelimit-remaining", "0")
+			ctx.SetHeader("retry-after", "1")
+			return ctx.String(429, "Too Many Requests")
+		}
+	}
+
+	skipMap := make(map[string]bool, len(config.SkipPaths))
+	for _, path := range config.SkipPaths {
+		skipMap[path] = true
+	}
+
+	// Token bucket limiter
+	limiters := make(map[string]*tokenBucket)
+	mu := sync.RWMutex{}
+
+	// Cleanup old limiters periodically
+	go func() {
+		ticker := time.NewTicker(5 * time.Minute)
+		defer ticker.Stop()
+		for range ticker.C {
+			mu.Lock()
+			for key, limiter := range limiters {
+				if time.Since(limiter.lastAccess) > 10*time.Minute {
+					delete(limiters, key)
+				}
+			}
+			mu.Unlock()
+		}
+	}()
+
 	return func(next Handler) Handler {
 		return HandlerFunc(func(ctx *Context) error {
-			_ = requestsPerSecond
+			// Skip rate limiting for specified paths
+			if skipMap[ctx.Path()] {
+				return next.ServeHTTP2(ctx)
+			}
+
+			key := config.KeyFunc(ctx)
+			if key == "" {
+				// If we can't identify the client, allow the request
+				return next.ServeHTTP2(ctx)
+			}
+
+			// Get or create limiter for this key
+			mu.Lock()
+			limiter, exists := limiters[key]
+			if !exists {
+				limiter = newTokenBucket(config.RequestsPerSecond, config.BurstSize)
+				limiters[key] = limiter
+			}
+			limiter.lastAccess = time.Now()
+			mu.Unlock()
+
+			// Check if request is allowed
+			if !limiter.allow() {
+				// Set rate limit headers
+				ctx.SetHeader("x-ratelimit-limit", fmt.Sprintf("%d", config.RequestsPerSecond))
+				ctx.SetHeader("x-ratelimit-remaining", "0")
+				ctx.SetHeader("x-ratelimit-reset", fmt.Sprintf("%d", time.Now().Add(time.Second).Unix()))
+				ctx.SetHeader("retry-after", "1")
+				return config.ErrorHandler(ctx)
+			}
+
+			// Set rate limit headers for successful requests
+			remaining := limiter.tokens
+			if remaining < 0 {
+				remaining = 0
+			}
+			ctx.SetHeader("x-ratelimit-limit", fmt.Sprintf("%d", config.RequestsPerSecond))
+			ctx.SetHeader("x-ratelimit-remaining", fmt.Sprintf("%d", remaining))
+			ctx.SetHeader("x-ratelimit-reset", fmt.Sprintf("%d", time.Now().Add(time.Second).Unix()))
 
 			return next.ServeHTTP2(ctx)
 		})
 	}
+}
+
+// tokenBucket implements a token bucket rate limiter
+type tokenBucket struct {
+	capacity   int
+	tokens     int
+	refillRate int
+	lastRefill time.Time
+	lastAccess time.Time
+	mu         sync.Mutex
+}
+
+// newTokenBucket creates a new token bucket with the given capacity and refill rate
+func newTokenBucket(rate, burst int) *tokenBucket {
+	return &tokenBucket{
+		capacity:   burst,
+		tokens:     burst,
+		refillRate: rate,
+		lastRefill: time.Now(),
+		lastAccess: time.Now(),
+	}
+}
+
+// allow checks if a request is allowed and consumes a token if so
+func (tb *tokenBucket) allow() bool {
+	tb.mu.Lock()
+	defer tb.mu.Unlock()
+
+	now := time.Now()
+
+	// Refill tokens based on time elapsed
+	elapsed := now.Sub(tb.lastRefill)
+	tokensToAdd := int(float64(elapsed.Nanoseconds()) / float64(time.Second) * float64(tb.refillRate))
+
+	if tokensToAdd > 0 {
+		tb.tokens += tokensToAdd
+		if tb.tokens > tb.capacity {
+			tb.tokens = tb.capacity
+		}
+		tb.lastRefill = now
+	}
+
+	// Check if we have tokens available
+	if tb.tokens > 0 {
+		tb.tokens--
+		return true
+	}
+
+	return false
+}
+
+// HealthConfig holds configuration for the Health middleware.
+type HealthConfig struct {
+	// Path is the endpoint path for health checks (default: "/health")
+	Path string
+	// Handler is a custom health check handler (optional)
+	Handler func(ctx *Context) error
+	// SkipPaths lists additional paths to skip health check middleware
+	SkipPaths []string
+}
+
+// DefaultHealthConfig returns a HealthConfig with sensible defaults.
+func DefaultHealthConfig() HealthConfig {
+	return HealthConfig{
+		Path: "/health",
+		Handler: func(ctx *Context) error {
+			return ctx.JSON(200, map[string]interface{}{
+				"status":    "ok",
+				"timestamp": time.Now().UTC().Format(time.RFC3339),
+				"uptime":    time.Since(startTime).String(),
+			})
+		},
+		SkipPaths: []string{},
+	}
+}
+
+var startTime = time.Now()
+
+// Health returns a middleware that sets up a health check endpoint.
+func Health() Middleware {
+	return HealthWithConfig(DefaultHealthConfig())
+}
+
+// HealthWithConfig returns a middleware that sets up a health check endpoint with custom configuration.
+func HealthWithConfig(config HealthConfig) Middleware {
+	if config.Path == "" {
+		config.Path = "/health"
+	}
+	if config.Handler == nil {
+		config.Handler = func(ctx *Context) error {
+			return ctx.JSON(200, map[string]interface{}{
+				"status":    "ok",
+				"timestamp": time.Now().UTC().Format(time.RFC3339),
+				"uptime":    time.Since(startTime).String(),
+			})
+		}
+	}
+
+	skipMap := make(map[string]bool, len(config.SkipPaths))
+	for _, path := range config.SkipPaths {
+		skipMap[path] = true
+	}
+
+	return func(next Handler) Handler {
+		return HandlerFunc(func(ctx *Context) error {
+			// Handle health check endpoint
+			if ctx.Path() == config.Path {
+				return config.Handler(ctx)
+			}
+
+			// Skip health check middleware for specified paths
+			if skipMap[ctx.Path()] {
+				return next.ServeHTTP2(ctx)
+			}
+
+			return next.ServeHTTP2(ctx)
+		})
+	}
+}
+
+// DocsConfig holds configuration for the Docs middleware.
+type DocsConfig struct {
+	// Path is the endpoint path for documentation (default: "/docs")
+	Path string
+	// Title is the title of the API documentation (default: "API Documentation")
+	Title string
+	// Description is the description of the API (default: "API Documentation")
+	Description string
+	// Version is the API version (default: "1.0.0")
+	Version string
+	// ContactName is the contact name for the API
+	ContactName string
+	// ContactEmail is the contact email for the API
+	ContactEmail string
+	// ContactURL is the contact URL for the API
+	ContactURL string
+	// LicenseName is the license name for the API
+	LicenseName string
+	// LicenseURL is the license URL for the API
+	LicenseURL string
+	// ServerURL is the server URL (default: "http://localhost:8080")
+	ServerURL string
+	// Routes is a list of routes to document (optional, will be auto-discovered if empty)
+	Routes []RouteInfo
+	// SkipPaths lists additional paths to skip docs middleware
+	SkipPaths []string
+	// AutoDiscover enables automatic route discovery from the router
+	AutoDiscover bool
+	// Router is the router to discover routes from (required if AutoDiscover is true)
+	Router *Router
+}
+
+// RouteInfo represents information about an API route.
+type RouteInfo struct {
+	Method      string            `json:"method"`
+	Path        string            `json:"path"`
+	Summary     string            `json:"summary"`
+	Description string            `json:"description"`
+	Tags        []string          `json:"tags"`
+	Parameters  []ParameterInfo   `json:"parameters,omitempty"`
+	Responses   map[string]string `json:"responses,omitempty"`
+}
+
+// ParameterInfo represents information about a route parameter.
+type ParameterInfo struct {
+	Name        string `json:"name"`
+	In          string `json:"in"` // "path", "query", "header", "cookie"
+	Required    bool   `json:"required"`
+	Description string `json:"description,omitempty"`
+	Type        string `json:"type,omitempty"`
+}
+
+// DefaultDocsConfig returns a DocsConfig with sensible defaults.
+func DefaultDocsConfig() DocsConfig {
+	return DocsConfig{
+		Path:         "/docs",
+		Title:        "API Documentation",
+		Description:  "API Documentation",
+		Version:      "1.0.0",
+		ServerURL:    "http://localhost:8080",
+		Routes:       []RouteInfo{},
+		SkipPaths:    []string{},
+		AutoDiscover: true,
+		Router:       nil,
+	}
+}
+
+// Docs returns a middleware that serves Swagger-style API documentation.
+func Docs() Middleware {
+	return DocsWithConfig(DefaultDocsConfig())
+}
+
+// DocsWithRouter returns a middleware that automatically discovers and documents routes from the given router.
+func DocsWithRouter(router *Router) Middleware {
+	config := DefaultDocsConfig()
+	config.Router = router
+	config.AutoDiscover = true
+	return DocsWithConfig(config)
+}
+
+// DocsWithConfig returns a middleware that serves API documentation with custom configuration.
+func DocsWithConfig(config DocsConfig) Middleware {
+	if config.Path == "" {
+		config.Path = "/docs"
+	}
+	if config.Title == "" {
+		config.Title = "API Documentation"
+	}
+	if config.Description == "" {
+		config.Description = "API Documentation"
+	}
+	if config.Version == "" {
+		config.Version = "1.0.0"
+	}
+	if config.ServerURL == "" {
+		config.ServerURL = "http://localhost:8080"
+	}
+
+	skipMap := make(map[string]bool, len(config.SkipPaths))
+	for _, path := range config.SkipPaths {
+		skipMap[path] = true
+	}
+
+	return func(next Handler) Handler {
+		return HandlerFunc(func(ctx *Context) error {
+			// Handle documentation endpoint
+			if ctx.Path() == config.Path {
+				return serveDocs(ctx, config)
+			}
+
+			// Skip docs middleware for specified paths
+			if skipMap[ctx.Path()] {
+				return next.ServeHTTP2(ctx)
+			}
+
+			return next.ServeHTTP2(ctx)
+		})
+	}
+}
+
+// serveDocs serves the Swagger UI documentation page
+func serveDocs(ctx *Context, config DocsConfig) error {
+	// Auto-discover routes if enabled and router is provided
+	if config.AutoDiscover && config.Router != nil {
+		discoveredRoutes := config.Router.GetRoutes()
+		// Flatten the discovered routes into a single slice
+		var allRoutes []RouteInfo
+		for _, methodRoutes := range discoveredRoutes {
+			allRoutes = append(allRoutes, methodRoutes...)
+		}
+		config.Routes = allRoutes
+	}
+
+	// Generate OpenAPI spec
+	spec := generateOpenAPISpec(config)
+
+	// Serve Swagger UI HTML
+	html := generateSwaggerUIHTML(config, spec)
+
+	ctx.SetHeader("content-type", "text/html; charset=utf-8")
+	return ctx.HTML(200, html)
+}
+
+// generateOpenAPISpec generates an OpenAPI 3.0 specification
+func generateOpenAPISpec(config DocsConfig) map[string]interface{} {
+	spec := map[string]interface{}{
+		"openapi": "3.0.0",
+		"info": map[string]interface{}{
+			"title":       config.Title,
+			"description": config.Description,
+			"version":     config.Version,
+		},
+		"servers": []map[string]interface{}{
+			{
+				"url":         config.ServerURL,
+				"description": "API Server",
+			},
+		},
+		"paths": make(map[string]interface{}),
+	}
+
+	// Add contact info if provided
+	if config.ContactName != "" || config.ContactEmail != "" || config.ContactURL != "" {
+		contact := make(map[string]interface{})
+		if config.ContactName != "" {
+			contact["name"] = config.ContactName
+		}
+		if config.ContactEmail != "" {
+			contact["email"] = config.ContactEmail
+		}
+		if config.ContactURL != "" {
+			contact["url"] = config.ContactURL
+		}
+		spec["info"].(map[string]interface{})["contact"] = contact
+	}
+
+	// Add license info if provided
+	if config.LicenseName != "" || config.LicenseURL != "" {
+		license := make(map[string]interface{})
+		if config.LicenseName != "" {
+			license["name"] = config.LicenseName
+		}
+		if config.LicenseURL != "" {
+			license["url"] = config.LicenseURL
+		}
+		spec["info"].(map[string]interface{})["license"] = license
+	}
+
+	// Add routes to paths
+	paths := spec["paths"].(map[string]interface{})
+	for _, route := range config.Routes {
+		pathItem := make(map[string]interface{})
+		if paths[route.Path] != nil {
+			pathItem = paths[route.Path].(map[string]interface{})
+		}
+
+		operation := map[string]interface{}{
+			"summary":     route.Summary,
+			"description": route.Description,
+		}
+
+		if len(route.Tags) > 0 {
+			operation["tags"] = route.Tags
+		}
+
+		if len(route.Parameters) > 0 {
+			operation["parameters"] = route.Parameters
+		}
+
+		if len(route.Responses) > 0 {
+			operation["responses"] = route.Responses
+		} else {
+			operation["responses"] = map[string]interface{}{
+				"200": map[string]interface{}{
+					"description": "Successful response",
+				},
+			}
+		}
+
+		pathItem[strings.ToLower(route.Method)] = operation
+		paths[route.Path] = pathItem
+	}
+
+	return spec
+}
+
+// generateSwaggerUIHTML generates the Swagger UI HTML page
+func generateSwaggerUIHTML(config DocsConfig, spec map[string]interface{}) string {
+	// Convert spec to JSON
+	specJSON, _ := json.MarshalIndent(spec, "", "  ")
+	specJSONStr := strings.ReplaceAll(string(specJSON), "`", "\\`")
+
+	return fmt.Sprintf(`<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>%s</title>
+    <link rel="stylesheet" type="text/css" href="https://unpkg.com/swagger-ui-dist@4.15.5/swagger-ui.css" />
+    <style>
+        html {
+            box-sizing: border-box;
+            overflow: -moz-scrollbars-vertical;
+            overflow-y: scroll;
+        }
+        *, *:before, *:after {
+            box-sizing: inherit;
+        }
+        body {
+            margin:0;
+            background: #fafafa;
+        }
+    </style>
+</head>
+<body>
+    <div id="swagger-ui"></div>
+    <script src="https://unpkg.com/swagger-ui-dist@4.15.5/swagger-ui-bundle.js"></script>
+    <script src="https://unpkg.com/swagger-ui-dist@4.15.5/swagger-ui-standalone-preset.js"></script>
+    <script>
+        window.onload = function() {
+            const ui = SwaggerUIBundle({
+                url: '',
+                spec: %s,
+                dom_id: '#swagger-ui',
+                deepLinking: true,
+                presets: [
+                    SwaggerUIBundle.presets.apis,
+                    SwaggerUIStandalonePreset
+                ],
+                plugins: [
+                    SwaggerUIBundle.plugins.DownloadUrl
+                ],
+                layout: "StandaloneLayout"
+            });
+        };
+    </script>
+</body>
+</html>`, config.Title, specJSONStr)
 }

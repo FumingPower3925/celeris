@@ -13,6 +13,8 @@ bin/
 *.dll
 *.so
 *.dylib
+main
+test-server
 
 # Ignore binaries and build artifacts without file extensions
 bench_test

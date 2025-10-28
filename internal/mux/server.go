@@ -51,6 +51,15 @@ type Server struct {
 // When enabled, it provides detailed logs for connection handling but may impact performance.
 const verboseConnLogging = false
 
+// silentGnetLogger is a logger that discards all gnet output to hide internal messages
+type silentGnetLogger struct{}
+
+func (s silentGnetLogger) Debugf(_ string, _ ...any) {}
+func (s silentGnetLogger) Infof(_ string, _ ...any)  {}
+func (s silentGnetLogger) Warnf(_ string, _ ...any)  {}
+func (s silentGnetLogger) Errorf(_ string, _ ...any) {}
+func (s silentGnetLogger) Fatalf(_ string, _ ...any) {}
+
 // connSession tracks per-connection state during protocol detection and handling.
 // It maintains the protocol detection buffer and references to the appropriate connection handlers.
 type connSession struct {
@@ -130,6 +139,8 @@ func (s *Server) Start() error {
 		// Hint gnet to enlarge read/write buffers to reduce syscalls under load
 		gnet.WithSocketRecvBuffer(1 << 20), // 1 MiB
 		gnet.WithSocketSendBuffer(1 << 20), // 1 MiB
+		// Use silent logger to hide gnet internal messages
+		gnet.WithLogger(silentGnetLogger{}),
 	}
 
 	if s.numEventLoop > 0 {

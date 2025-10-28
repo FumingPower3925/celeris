@@ -75,6 +75,11 @@ func (s *Server) Stop(ctx context.Context) error {
 	return nil
 }
 
+// Addr returns the server address.
+func (s *Server) Addr() string {
+	return s.config.Addr
+}
+
 type streamHandlerAdapter struct {
 	handler     Handler
 	processor   *stream.Processor

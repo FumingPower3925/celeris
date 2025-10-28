@@ -85,7 +85,24 @@ Full documentation is available at [https://albertbausili.github.io/celeris](htt
 - [Examples](docs/content/examples/)
 - [Architecture](docs/content/architecture/)
 
-## Examples
+## Code Examples
+
+We provide comprehensive examples demonstrating all Celeris features. Each example is self-contained and focuses on specific functionality:
+
+**[View all examples](examples/README.md)** - Complete examples directory with middleware, routing, streaming, and more.
+
+The examples include:
+- **Middleware**: Logger, Recovery, CORS, Rate Limiting, Health Checks, Auto Documentation
+- **Core Features**: Basic Routing, Streaming, Server Push
+- **Advanced**: Request ID tracking, Compression, Error handling
+
+Each example can be run independently:
+```bash
+cd examples/logger
+go run main.go
+```
+
+## API Examples
 
 ### JSON API
 

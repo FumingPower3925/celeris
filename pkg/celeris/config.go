@@ -2,6 +2,7 @@
 package celeris
 
 import (
+	"io"
 	"log"
 	"time"
 )
@@ -25,6 +26,11 @@ type Config struct {
 	EnableH2             bool          // Enable HTTP/2 support (default true)
 }
 
+// newSilentLogger creates a silent logger that discards all output
+func newSilentLogger() *log.Logger {
+	return log.New(io.Discard, "", 0)
+}
+
 // DefaultConfig returns a Config with sensible default values.
 func DefaultConfig() Config {
 	return Config{
@@ -39,7 +45,7 @@ func DefaultConfig() Config {
 		MaxConcurrentStreams: 100,
 		MaxFrameSize:         16384,
 		InitialWindowSize:    65535,
-		Logger:               log.Default(),
+		Logger:               newSilentLogger(),
 		DisableKeepAlive:     false,
 		EnableH1:             true, // Enable HTTP/1.1 by default
 		EnableH2:             true, // Enable HTTP/2 by default

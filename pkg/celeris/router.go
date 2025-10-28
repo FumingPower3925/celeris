@@ -454,6 +454,145 @@ func MustParam(ctx *Context, name string) string {
 	return val
 }
 
+// GetRoutes returns all registered routes for documentation purposes.
+func (r *Router) GetRoutes() map[string][]RouteInfo {
+	routes := make(map[string][]RouteInfo)
+
+	for method, root := range r.routes {
+		routes[method] = r.collectRoutes(root, "/", method)
+	}
+
+	return routes
+}
+
+// collectRoutes recursively collects all routes from the route tree.
+func (r *Router) collectRoutes(node *routeNode, currentPath string, method string) []RouteInfo {
+	var routes []RouteInfo
+
+	// If this node has a handler, it's a complete route
+	if node.handler != nil {
+		routeInfo := RouteInfo{
+			Method:      method,
+			Path:        currentPath,
+			Summary:     r.generateRouteSummary(method, currentPath),
+			Description: r.generateRouteDescription(method, currentPath),
+			Tags:        r.generateRouteTags(currentPath),
+		}
+
+		// Extract parameters from path
+		routeInfo.Parameters = r.extractParameters(currentPath)
+
+		routes = append(routes, routeInfo)
+	}
+
+	// Recursively collect from children
+	for key, child := range node.children {
+		var childPath string
+		switch key {
+		case ":":
+			childPath = currentPath + ":" + child.paramName
+		case "*":
+			childPath = currentPath + "*" + child.paramName
+		default:
+			childPath = currentPath + key
+		}
+
+		if currentPath != "/" {
+			childPath = currentPath + "/" + key
+		}
+
+		childRoutes := r.collectRoutes(child, childPath, method)
+		routes = append(routes, childRoutes...)
+	}
+
+	return routes
+}
+
+// generateRouteSummary creates a basic summary for a route.
+func (r *Router) generateRouteSummary(method, path string) string {
+	switch method {
+	case "GET":
+		return "Retrieve " + r.pathToResource(path)
+	case "POST":
+		return "Create " + r.pathToResource(path)
+	case "PUT":
+		return "Update " + r.pathToResource(path)
+	case "DELETE":
+		return "Delete " + r.pathToResource(path)
+	case "PATCH":
+		return "Partially update " + r.pathToResource(path)
+	case "HEAD":
+		return "Get headers for " + r.pathToResource(path)
+	case "OPTIONS":
+		return "Get options for " + r.pathToResource(path)
+	default:
+		return method + " " + path
+	}
+}
+
+// generateRouteDescription creates a basic description for a route.
+func (r *Router) generateRouteDescription(method, path string) string {
+	return "Endpoint for " + strings.ToLower(method) + " requests to " + path
+}
+
+// generateRouteTags creates tags for grouping routes.
+func (r *Router) generateRouteTags(path string) []string {
+	// Extract the first segment as a tag
+	segments := strings.Split(strings.Trim(path, "/"), "/")
+	if len(segments) > 0 && segments[0] != "" {
+		return []string{segments[0]}
+	}
+	return []string{"general"}
+}
+
+// pathToResource converts a path to a resource name.
+func (r *Router) pathToResource(path string) string {
+	// Remove leading slash and convert to singular
+	resource := strings.Trim(path, "/")
+	if resource == "" {
+		return "root resource"
+	}
+
+	// Convert to singular (basic heuristic)
+	if strings.HasSuffix(resource, "s") && len(resource) > 1 {
+		resource = resource[:len(resource)-1]
+	}
+
+	return resource
+}
+
+// extractParameters extracts parameter information from a path.
+func (r *Router) extractParameters(path string) []ParameterInfo {
+	var params []ParameterInfo
+
+	segments := strings.Split(strings.Trim(path, "/"), "/")
+	for _, segment := range segments {
+		if strings.HasPrefix(segment, ":") {
+			paramName := segment[1:]
+			param := ParameterInfo{
+				Name:        paramName,
+				In:          "path",
+				Required:    true,
+				Description: "Path parameter: " + paramName,
+				Type:        "string",
+			}
+			params = append(params, param)
+		} else if strings.HasPrefix(segment, "*") {
+			paramName := segment[1:]
+			param := ParameterInfo{
+				Name:        paramName,
+				In:          "path",
+				Required:    true,
+				Description: "Wildcard parameter: " + paramName,
+				Type:        "string",
+			}
+			params = append(params, param)
+		}
+	}
+
+	return params
+}
+
 // Static registers a route to serve static files from a directory.
 func (r *Router) Static(prefix, root string) {
 	// Ensure prefix ends with /*filepath
