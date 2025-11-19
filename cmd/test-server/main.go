@@ -28,6 +28,8 @@ func main() {
 	})
 
 	router.POST("/echo", func(ctx *celeris.Context) error {
+		// Read body to avoid flow control stall if h2spec sends data
+		_, _ = ctx.BodyBytes()
 		return ctx.String(200, "echo")
 	})
 

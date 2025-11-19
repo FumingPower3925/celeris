@@ -734,7 +734,20 @@ func (p *Processor) runHandler(stream *Stream) {
 
 			// If headers were sent but stream is still open (e.g. streaming response),
 			// we need to close it by sending an empty DATA frame with END_STREAM flag
+			// UNLESS we have buffered outbound data waiting for window update.
 			if state == StateOpen || state == StateHalfClosedRemote {
+				// Check if we have buffered data
+				hasBufferedData := false
+				if stream.OutboundBuffer != nil && stream.OutboundBuffer.Len() > 0 {
+					hasBufferedData = true
+				}
+
+				// If we have buffered data, we rely on flushBufferedData to close the stream
+				// when the buffer is drained (s.OutboundEndStream was set in WriteResponse).
+				if hasBufferedData {
+					return
+				}
+
 				_ = p.writer.WriteData(stream.ID, true, nil)
 				if flusher, ok := p.writer.(interface{ Flush() error }); ok {
 					_ = flusher.Flush()
