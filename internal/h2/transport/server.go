@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"runtime"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -38,22 +39,27 @@ const (
 	http2Preface = "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"
 )
 
+// ErrConnectionClosed indicates the connection should be closed immediately
+var ErrConnectionClosed = fmt.Errorf("connection closed")
+
 // Server implements the gnet.EventHandler interface for HTTP/2 connections.
 // It manages the lifecycle of HTTP/2 connections and streams.
 type Server struct {
 	gnet.BuiltinEventEngine
-	handler       stream.Handler
-	ctx           context.Context
-	cancel        context.CancelFunc
-	addr          string
-	multicore     bool
-	numEventLoop  int
-	reusePort     bool
-	logger        *log.Logger
-	engine        gnet.Engine
-	maxStreams    uint32
-	activeConns   []gnet.Conn // Track connections for shutdown only
-	activeConnsMu sync.Mutex  // Protects activeConns
+	handler        stream.Handler
+	ctx            context.Context
+	cancel         context.CancelFunc
+	addr           string
+	multicore      bool
+	numEventLoop   int
+	reusePort      bool
+	logger         *log.Logger
+	engine         gnet.Engine
+	maxStreams     uint32
+	maxConnections uint32
+	activeConns    []gnet.Conn // Track connections for shutdown only
+	activeConnsMu  sync.Mutex  // Protects activeConns
+	connCount      uint32      // Atomic counter for active connections
 }
 
 // headersSlicePool reuses small header slices to reduce memory allocations per response.
@@ -71,6 +77,7 @@ type Config struct {
 	ReusePort            bool
 	Logger               *log.Logger
 	MaxConcurrentStreams uint32
+	MaxConnections       uint32 // Maximum concurrent connections
 }
 
 // NewServer creates a new HTTP/2 server with gnet transport engine.
@@ -83,15 +90,17 @@ func NewServer(handler stream.Handler, config Config) *Server {
 	}
 
 	return &Server{
-		handler:      handler,
-		ctx:          ctx,
-		cancel:       cancel,
-		addr:         config.Addr,
-		multicore:    config.Multicore,
-		numEventLoop: config.NumEventLoop,
-		reusePort:    config.ReusePort,
-		logger:       config.Logger,
-		maxStreams:   config.MaxConcurrentStreams,
+		handler:        handler,
+		ctx:            ctx,
+		cancel:         cancel,
+		addr:           config.Addr,
+		multicore:      config.Multicore,
+		numEventLoop:   config.NumEventLoop,
+		reusePort:      config.ReusePort,
+		logger:         config.Logger,
+		maxStreams:     config.MaxConcurrentStreams,
+		maxConnections: config.MaxConnections,
+		connCount:      0,
 	}
 }
 
@@ -106,8 +115,22 @@ func (s *Server) Start() error {
 		gnet.WithMulticore(s.multicore),
 		gnet.WithReusePort(s.reusePort),
 		gnet.WithTCPNoDelay(gnet.TCPNoDelay),
-		// Use silent logger to hide gnet internal messages
+		// Massive buffers for maximum RPS
+		gnet.WithSocketRecvBuffer(64 << 20), // 64 MiB for extreme performance
+		gnet.WithSocketSendBuffer(64 << 20), // 64 MiB for extreme performance
+		// Extended keep-alive for connection reuse
+		gnet.WithTCPKeepAlive(time.Minute * 30),
+		// Use silent logger to eliminate I/O overhead
 		gnet.WithLogger(silentGnetLogger{}),
+		// Maximum concurrency settings
+		gnet.WithLockOSThread(false),
+		// Large buffers for high RPS
+		gnet.WithReadBufferCap(1024 << 10),  // 1 MB
+		gnet.WithWriteBufferCap(1024 << 10), // 1 MB
+		// Enable performance optimizations
+		gnet.WithTicker(true),
+		gnet.WithLoadBalancing(gnet.RoundRobin),
+		gnet.WithNumEventLoop(runtime.NumCPU()),
 	}
 
 	if s.numEventLoop > 0 {
@@ -115,7 +138,16 @@ func (s *Server) Start() error {
 	}
 
 	s.logger.Printf("Starting HTTP/2 server on %s", s.addr)
-	return gnet.Run(s, "tcp://"+s.addr, options...)
+	s.logger.Printf("HTTP/2 server is listening on %s (multicore: %v)", s.addr, s.multicore)
+
+	// Start the server in a goroutine since gnet.Run is blocking
+	go func() {
+		if err := gnet.Run(s, "tcp://"+s.addr, options...); err != nil {
+			s.logger.Printf("gnet.Run error: %v", err)
+		}
+	}()
+
+	return nil
 }
 
 // Stop gracefully stops the server
@@ -174,6 +206,28 @@ func (s *Server) OnBoot(eng gnet.Engine) gnet.Action {
 
 // OnOpen is called when a new connection is opened
 func (s *Server) OnOpen(c gnet.Conn) ([]byte, gnet.Action) {
+	fmt.Printf("DEBUG: OnOpen called for %s\n", c.RemoteAddr().String())
+	// Check connection limit BEFORE incrementing counter to avoid race condition
+	currentConns := atomic.LoadUint32(&s.connCount)
+	if s.maxConnections > 0 && currentConns >= s.maxConnections {
+		// Reject connection - send 503 Service Unavailable
+		s.logger.Printf("Connection rejected from %s: too many connections (%d/%d)",
+			c.RemoteAddr().String(), currentConns, s.maxConnections)
+
+		// Send HTTP 503 response before closing
+		response := "HTTP/1.1 503 Service Unavailable\r\n" +
+			"Content-Type: text/plain\r\n" +
+			"Content-Length: 19\r\n" +
+			"Connection: close\r\n" +
+			"\r\n" +
+			"Service Unavailable"
+
+		return []byte(response), gnet.Close
+	}
+
+	// Now safely increment the counter
+	atomic.AddUint32(&s.connCount, 1)
+
 	conn := NewConnection(c, s.handler, s.logger, s.maxStreams)
 	c.SetContext(conn) // Use gnet.Conn.Context() for per-connection storage (best practice)
 
@@ -183,6 +237,13 @@ func (s *Server) OnOpen(c gnet.Conn) ([]byte, gnet.Action) {
 	s.activeConnsMu.Unlock()
 
 	s.logger.Printf("New connection from %s", c.RemoteAddr().String())
+
+	// Send server preface (SETTINGS) immediately upon connection
+	if err := conn.sendServerPreface(); err != nil {
+		s.logger.Printf("Failed to send server preface: %v", err)
+		return nil, gnet.Close
+	}
+
 	return nil, gnet.None
 }
 
@@ -193,6 +254,9 @@ func (s *Server) OnClose(c gnet.Conn, err error) gnet.Action {
 			_ = httpConn.Close()
 		}
 	}
+
+	// Decrement connection counter
+	atomic.AddUint32(&s.connCount, ^uint32(0)) // Decrement counter (^uint32(0) = -1)
 
 	// Remove from active connections list
 	s.activeConnsMu.Lock()
@@ -220,26 +284,85 @@ func (s *Server) OnTraffic(c gnet.Conn) gnet.Action {
 	ctx := c.Context()
 	if ctx == nil {
 		s.logger.Printf("Connection context not found")
-		return gnet.Close
+		// Send 400 Bad Request instead of closing
+		response := "HTTP/1.1 400 Bad Request\r\n" +
+			"Content-Type: text/plain\r\n" +
+			"Content-Length: 12\r\n" +
+			"Connection: close\r\n" +
+			"\r\n" +
+			"Bad Request"
+		_ = c.AsyncWrite([]byte(response), func(_ gnet.Conn, _ error) error {
+			// Close connection after sending response
+			_ = c.Close()
+			return nil
+		})
+		return gnet.None
 	}
 
 	conn, ok := ctx.(*Connection)
 	if !ok {
 		s.logger.Printf("Invalid connection context type")
-		return gnet.Close
+		// Send 400 Bad Request instead of closing
+		response := "HTTP/1.1 400 Bad Request\r\n" +
+			"Content-Type: text/plain\r\n" +
+			"Content-Length: 12\r\n" +
+			"Connection: close\r\n" +
+			"\r\n" +
+			"Bad Request"
+		_ = c.AsyncWrite([]byte(response), func(_ gnet.Conn, _ error) error {
+			// Close connection after sending response
+			_ = c.Close()
+			return nil
+		})
+		return gnet.None
 	}
 
 	// Read all available data
 	buf, err := c.Next(-1)
 	if err != nil {
 		s.logger.Printf("Error reading data: %v", err)
-		return gnet.Close
+		// Send 400 Bad Request instead of closing
+		response := "HTTP/1.1 400 Bad Request\r\n" +
+			"Content-Type: text/plain\r\n" +
+			"Content-Length: 12\r\n" +
+			"Connection: close\r\n" +
+			"\r\n" +
+			"Bad Request"
+		_ = c.AsyncWrite([]byte(response), func(_ gnet.Conn, _ error) error {
+			// Close connection after sending response
+			_ = c.Close()
+			return nil
+		})
+		return gnet.None
+	}
+
+	// Ignore empty reads to prevent busy loops
+	if len(buf) == 0 {
+		return gnet.None
 	}
 
 	// Process the data
 	if err := conn.HandleData(s.ctx, buf); err != nil {
+		if err == ErrConnectionClosed {
+			// Connection closed by handler (e.g. after GOAWAY for fatal protocol error)
+			// Use CloseImmediate to send GOAWAY and close connection in AsyncWritev callback
+			_ = conn.writer.CloseImmediate()
+			return gnet.None
+		}
 		s.logger.Printf("Error handling data: %v", err)
-		return gnet.Close
+		// Send 400 Bad Request instead of closing
+		response := "HTTP/1.1 400 Bad Request\r\n" +
+			"Content-Type: text/plain\r\n" +
+			"Content-Length: 12\r\n" +
+			"Connection: close\r\n" +
+			"\r\n" +
+			"Bad Request"
+		_ = c.AsyncWrite([]byte(response), func(_ gnet.Conn, _ error) error {
+			// Close connection after sending response
+			_ = c.Close()
+			return nil
+		})
+		return gnet.None
 	}
 
 	return gnet.None
@@ -308,7 +431,18 @@ func (c *Connection) HandleData(ctx context.Context, data []byte) error {
 		// Preface timeout guard: if peer hasn't sent complete preface within 1s, terminate
 		if time.Since(c.prefaceStart) > 1*time.Second && c.buffer.Len() > 0 {
 			_ = c.processor.SendGoAway(0, http2.ErrCodeProtocol, []byte("preface timeout"))
-			_ = c.conn.Close()
+			// Send HTTP error response before closing
+			response := "HTTP/1.1 400 Bad Request\r\n" +
+				"Content-Type: text/plain\r\n" +
+				"Content-Length: 12\r\n" +
+				"Connection: close\r\n" +
+				"\r\n" +
+				"Bad Request"
+			_ = c.conn.AsyncWrite([]byte(response), func(_ gnet.Conn, _ error) error {
+				// Close connection after sending response
+				_ = c.conn.Close()
+				return nil
+			})
 			return nil
 		}
 		// If we have some bytes and they deviate from the required preface prefix, immediately reject
@@ -321,10 +455,19 @@ func (c *Connection) HandleData(ctx context.Context, data []byte) error {
 				// Close promptly after attempting to flush GOAWAY
 				_ = c.writer.Flush()
 				_ = c.conn.Wake(nil)
-				time.AfterFunc(5*time.Millisecond, func() { _ = c.conn.Close() })
+				// Send HTTP error response before closing
+				response := "HTTP/1.1 400 Bad Request\r\n" +
+					"Content-Type: text/plain\r\n" +
+					"Content-Length: 12\r\n" +
+					"Connection: close\r\n" +
+					"\r\n" +
+					"Bad Request"
+				_ = c.conn.AsyncWrite([]byte(response), func(_ gnet.Conn, _ error) error {
+					// Close connection after sending response
+					_ = c.conn.Close()
+					return nil
+				})
 				return nil
-			} else if verboseLogging {
-				c.logger.Printf("[H2] Preface prefix OK so far: len=%d", c.buffer.Len())
 			}
 		}
 		if c.buffer.Len() >= len(http2Preface) {
@@ -335,8 +478,18 @@ func (c *Connection) HandleData(ctx context.Context, data []byte) error {
 				c.logger.Printf("Invalid preface: %q", string(preface))
 				// Send GOAWAY(PROTOCOL_ERROR) and close the connection per RFC 7540 §3.5
 				_ = c.processor.SendGoAway(0, http2.ErrCodeProtocol, []byte("invalid connection preface"))
-				// Delay-close to allow GOAWAY to flush via AsyncWritev callback
-				time.AfterFunc(5*time.Millisecond, func() { _ = c.conn.Close() })
+				// Send HTTP error response before closing
+				response := "HTTP/1.1 400 Bad Request\r\n" +
+					"Content-Type: text/plain\r\n" +
+					"Content-Length: 12\r\n" +
+					"Connection: close\r\n" +
+					"\r\n" +
+					"Bad Request"
+				_ = c.conn.AsyncWrite([]byte(response), func(_ gnet.Conn, _ error) error {
+					// Close connection after sending response
+					_ = c.conn.Close()
+					return nil
+				})
 				return nil
 			}
 
@@ -346,23 +499,27 @@ func (c *Connection) HandleData(ctx context.Context, data []byte) error {
 			}
 
 			// Send server preface (SETTINGS frame)
-			if err := c.sendServerPreface(); err != nil {
-				return fmt.Errorf("failed to send server preface: %w", err)
-			}
+			// NOTE: We now send SETTINGS in OnOpen, so we don't need to send it here.
+			// However, if we wanted to be strict about waiting for client preface, we would do it here.
+			// For now, we assume it's already sent or will be sent.
+			// To be safe and idempotent, we can check if we already sent it?
+			// But sendServerPreface doesn't check.
+			// Let's rely on OnOpen sending it.
+			// if err := c.sendServerPreface(); err != nil {
+			// 	return fmt.Errorf("failed to send server preface: %w", err)
+			// }
 
-			// IMPORTANT: Return here to let gnet send our SETTINGS before we process client frames
-			// The client is waiting for our SETTINGS before sending its frames
-			// Next OnTraffic call will process the client's frames
+			// Continue processing any frames that arrived with the preface (e.g. SETTINGS)
 			if verboseLogging {
-				c.logger.Printf("Returning from HandleData to allow SETTINGS to be sent")
+				c.logger.Printf("Preface received, continuing to process buffered frames")
+			}
+		} else {
+			// Need more data
+			if verboseLogging {
+				c.logger.Printf("Waiting for complete preface (have %d, need %d)", c.buffer.Len(), len(http2Preface))
 			}
 			return nil
 		}
-		// Need more data
-		if verboseLogging {
-			c.logger.Printf("Waiting for complete preface (have %d, need %d)", c.buffer.Len(), len(http2Preface))
-		}
-		return nil
 	}
 
 	// Bind a persistent reader to preserve CONTINUATION state in the framer
@@ -409,15 +566,13 @@ func (c *Connection) HandleData(ctx context.Context, data []byte) error {
 						}
 						_ = c.processor.SendGoAway(c.processor.GetManager().GetLastStreamID(), http2.ErrCodeProtocol, []byte("HEADERS while header block open"))
 						_ = c.writer.Flush()
-						_ = c.conn.Close()
-						return nil
+						return ErrConnectionClosed
 					}
 					// Unknown extension frames mid-block are also connection errors; treat types not in core set
 					if ftype != http2.FrameContinuation && ftype != http2.FrameSettings && ftype != http2.FramePing && ftype != http2.FrameWindowUpdate && ftype != http2.FrameGoAway && ftype != http2.FramePriority && ftype != http2.FrameRSTStream && ftype != http2.FrameData {
 						_ = c.processor.SendGoAway(c.processor.GetManager().GetLastStreamID(), http2.ErrCodeProtocol, []byte("unknown frame mid header block"))
 						_ = c.writer.Flush()
-						_ = c.conn.Close()
-						return nil
+						return ErrConnectionClosed
 					}
 				}
 			}
@@ -448,8 +603,7 @@ func (c *Connection) HandleData(ctx context.Context, data []byte) error {
 					}
 					_ = c.processor.SendGoAway(c.processor.GetManager().GetLastStreamID(), http2.ErrCodeProtocol, []byte("expected CONTINUATION on stream"))
 					_ = c.writer.Flush()
-					_ = c.conn.Close()
-					return nil
+					return ErrConnectionClosed
 				}
 				// If another HEADERS arrives on a different stream while a header block is open, error
 				if streamID != 0 && streamID != expID && ftype == http2.FrameHeaders {
@@ -458,15 +612,13 @@ func (c *Connection) HandleData(ctx context.Context, data []byte) error {
 					}
 					_ = c.processor.SendGoAway(c.processor.GetManager().GetLastStreamID(), http2.ErrCodeProtocol, []byte("HEADERS while header block open"))
 					_ = c.writer.Flush()
-					_ = c.conn.Close()
-					return nil
+					return ErrConnectionClosed
 				}
 				// Treat unknown extension frames mid-block as connection error
 				if ftype > http2.FrameContinuation && ftype != http2.FrameSettings && ftype != http2.FramePing && ftype != http2.FrameWindowUpdate && ftype != http2.FrameGoAway && ftype != http2.FramePriority && ftype != http2.FrameRSTStream && ftype != http2.FrameData {
 					_ = c.processor.SendGoAway(c.processor.GetManager().GetLastStreamID(), http2.ErrCodeProtocol, []byte("unknown frame mid header block"))
 					_ = c.writer.Flush()
-					_ = c.conn.Close()
-					return nil
+					return ErrConnectionClosed
 				}
 			}
 		}
@@ -479,8 +631,7 @@ func (c *Connection) HandleData(ctx context.Context, data []byte) error {
 			}
 			_ = c.processor.SendGoAway(c.processor.GetManager().GetLastStreamID(), http2.ErrCodeProtocol, []byte("HEADERS while header block open (pre-parse)"))
 			_ = c.writer.Flush()
-			_ = c.conn.Close()
-			return nil
+			return ErrConnectionClosed
 		}
 
 		// Log HEADERS peek context to debug closed-stream handling (h2spec 5.1.12)
@@ -510,19 +661,28 @@ func (c *Connection) HandleData(ctx context.Context, data []byte) error {
 						}
 						_ = c.processor.SendGoAway(m.GetLastClientStreamID(), http2.ErrCodeStreamClosed, []byte("frame on closed stream"))
 						_ = c.writer.Flush()
-						return nil
+						return ErrConnectionClosed
 					}
 				}
 			} else {
 				// Stream not found: if client reuses a previously closed stream ID, this is STREAM_CLOSED
 				m := c.processor.GetManager()
 				if streamID <= m.GetLastClientStreamID() {
+					// HEADERS on reused ID is PROTOCOL_ERROR per RFC 7540 §5.1.1
+					if ftype == http2.FrameHeaders {
+						if verboseLogging {
+							c.logger.Printf("[H2] Intercept HEADERS on reused closed stream sid=%d lastClient=%d; sending GOAWAY PROTOCOL_ERROR", streamID, m.GetLastClientStreamID())
+						}
+						_ = c.processor.SendGoAway(m.GetLastClientStreamID(), http2.ErrCodeProtocol, []byte("HEADERS on closed stream (reused id)"))
+						_ = c.writer.Flush()
+						return ErrConnectionClosed
+					}
 					if verboseLogging {
 						c.logger.Printf("[H2] Intercept frame %v on reused closed stream sid=%d lastClient=%d; sending GOAWAY STREAM_CLOSED", ftype, streamID, m.GetLastClientStreamID())
 					}
 					_ = c.processor.SendGoAway(m.GetLastClientStreamID(), http2.ErrCodeStreamClosed, []byte("frame on closed stream (reused id)"))
 					_ = c.writer.Flush()
-					return nil
+					return ErrConnectionClosed
 				}
 			}
 		}
@@ -535,9 +695,9 @@ func (c *Connection) HandleData(ctx context.Context, data []byte) error {
 				if verboseLogging {
 					c.logger.Printf("Invalid PING length %d", length)
 				}
-				// h2spec strict mode expects immediate TCP close without GOAWAY for invalid PING
-				_ = c.conn.Close()
-				return nil
+				_ = c.processor.SendGoAway(c.processor.GetManager().GetLastStreamID(), http2.ErrCodeFrameSize, []byte("invalid PING length"))
+				_ = c.writer.Flush()
+				return ErrConnectionClosed
 			}
 			// PING must have streamID 0
 			if streamID != 0 {
@@ -546,16 +706,14 @@ func (c *Connection) HandleData(ctx context.Context, data []byte) error {
 				}
 				_ = c.processor.SendGoAway(c.processor.GetManager().GetLastStreamID(), http2.ErrCodeProtocol, []byte("PING stream id must be 0"))
 				_ = c.writer.Flush()
-				_ = c.conn.Close()
-				return nil
+				return ErrConnectionClosed
 			}
 		case http2.FramePriority:
 			if length != 5 {
 				if streamID == 0 {
 					_ = c.processor.SendGoAway(0, http2.ErrCodeFrameSize, []byte("PRIORITY length"))
 					_ = c.writer.Flush()
-					_ = c.conn.Close()
-					return nil
+					return ErrConnectionClosed
 				}
 				c.MarkStreamClosed(streamID)
 				_ = c.WriteRSTStreamPriority(streamID, http2.ErrCodeFrameSize)
@@ -607,15 +765,13 @@ func (c *Connection) HandleData(ctx context.Context, data []byte) error {
 						// Connection-level WINDOW_UPDATE with 0 increment: GOAWAY + close
 						_ = c.processor.SendGoAway(c.processor.GetManager().GetLastStreamID(), http2.ErrCodeProtocol, []byte("WINDOW_UPDATE increment is 0"))
 						_ = c.writer.Flush()
-						_ = c.conn.Close()
-						return nil
+						return ErrConnectionClosed
 					}
 					// Stream-level: RST_STREAM + GOAWAY (h2spec strict expects one of them + optional close)
 					_ = c.WriteRSTStreamPriority(streamID, http2.ErrCodeProtocol)
 					_ = c.processor.SendGoAway(c.processor.GetManager().GetLastStreamID(), http2.ErrCodeProtocol, []byte("WINDOW_UPDATE increment is 0 on stream"))
 					_ = c.writer.Flush()
-					_ = c.conn.Close()
-					return nil
+					return ErrConnectionClosed
 				}
 			}
 
@@ -686,7 +842,18 @@ func (c *Connection) HandleData(ctx context.Context, data []byte) error {
 				if streamID != expID {
 					_ = c.processor.SendGoAway(c.processor.GetManager().GetLastStreamID(), http2.ErrCodeProtocol, []byte("HEADERS on other stream during header block"))
 					_ = c.writer.Flush()
-					_ = c.conn.Close()
+					// Send HTTP error response before closing
+					response := "HTTP/1.1 400 Bad Request\r\n" +
+						"Content-Type: text/plain\r\n" +
+						"Content-Length: 12\r\n" +
+						"Connection: close\r\n" +
+						"\r\n" +
+						"Bad Request"
+					_ = c.conn.AsyncWrite([]byte(response), func(_ gnet.Conn, _ error) error {
+						// Close connection after sending response
+						_ = c.conn.Close()
+						return nil
+					})
 					return nil
 				}
 				// Allow the frame on the expected stream but avoid concurrent stream enforcement
@@ -696,7 +863,18 @@ func (c *Connection) HandleData(ctx context.Context, data []byte) error {
 			if c.openHeaderBlock && streamID != 0 && streamID != c.openHeaderBlockStream {
 				_ = c.processor.SendGoAway(c.processor.GetManager().GetLastStreamID(), http2.ErrCodeProtocol, []byte("HEADERS on other stream during open header block"))
 				_ = c.writer.Flush()
-				_ = c.conn.Close()
+				// Send HTTP error response before closing
+				response := "HTTP/1.1 400 Bad Request\r\n" +
+					"Content-Type: text/plain\r\n" +
+					"Content-Length: 12\r\n" +
+					"Connection: close\r\n" +
+					"\r\n" +
+					"Bad Request"
+				_ = c.conn.AsyncWrite([]byte(response), func(_ gnet.Conn, _ error) error {
+					// Close connection after sending response
+					_ = c.conn.Close()
+					return nil
+				})
 				return nil
 			}
 			// Enforce MAX_CONCURRENT_STREAMS before parsing HEADERS payload
@@ -826,8 +1004,8 @@ func (c *Connection) HandleData(ctx context.Context, data []byte) error {
 					c.logger.Printf("Connection parse error: %v", http2.ErrCode(ce))
 				}
 				_ = c.processor.SendGoAway(c.processor.GetManager().GetLastStreamID(), http2.ErrCode(ce), []byte("frame parse error"))
-				// Do not manually skip bytes after framer error; let connection drain/close.
-				continue
+				// Force connection close
+				return ErrConnectionClosed
 			}
 			// Special-case invalid PING length -> send GOAWAY FRAME_SIZE_ERROR and skip offending frame bytes
 			if ftype == http2.FramePing && length != 8 {
@@ -835,27 +1013,14 @@ func (c *Connection) HandleData(ctx context.Context, data []byte) error {
 					c.logger.Printf("Invalid PING length %d, sending GOAWAY FRAME_SIZE_ERROR", length)
 				}
 				_ = c.processor.SendGoAway(c.processor.GetManager().GetLastStreamID(), http2.ErrCodeFrameSize, []byte("invalid PING length"))
-				consumed := int(length) + 9
-				if c.buffer.Len() >= consumed {
-					c.buffer.Next(consumed)
-				} else {
-					c.buffer.Reset()
-				}
-				// Reader is persistent; continue
-				continue
+				return ErrConnectionClosed
 			}
 			// Generic parse error: send PROTOCOL_ERROR GOAWAY and skip offending frame bytes
 			if verboseLogging {
 				c.logger.Printf("Parse error: %v, sending GOAWAY PROTOCOL_ERROR and skipping frame (ftype=%v len=%d sid=%d flags=0x%x)", err, ftype, length, streamID, flags)
 			}
 			_ = c.processor.SendGoAway(c.processor.GetManager().GetLastStreamID(), http2.ErrCodeProtocol, []byte("frame parse error"))
-			consumed := int(length) + 9
-			if c.buffer.Len() >= consumed {
-				c.buffer.Next(consumed)
-			} else {
-				c.buffer.Reset()
-			}
-			continue
+			return ErrConnectionClosed
 		}
 
 		if verboseLogging {
@@ -921,7 +1086,17 @@ func (c *Connection) HandleData(ctx context.Context, data []byte) error {
 			c.logger.Printf("Error processing frame: %v", err)
 			// Continue processing other frames
 		}
+		// If we sent GOAWAY (fatal or graceful), stop processing new frames from this packet
+		if c.sentGoAway.Load() {
+			return nil
+		}
 		// Do not prematurely return on END_STREAM; continue parsing to prioritize errors
+	}
+
+	// Flush any pending frames generated during processing (e.g. WINDOW_UPDATE, SETTINGS ACK)
+	if err := c.writer.Flush(); err != nil {
+		c.logger.Printf("Error flushing frames: %v", err)
+		return err
 	}
 
 	return nil
@@ -1073,15 +1248,18 @@ func (c *Connection) WriteResponse(streamID uint32, status int, headers [][2]str
 			remaining := body
 			// Always enter loop to handle buffering even when windows are non-positive
 			for len(remaining) > 0 {
-				// Check windows and buffer if necessary
-				if connWin <= 0 || streamWin <= 0 || maxFrame == 0 {
-					// Cannot send now; buffer remaining data
-					if s, ok := c.processor.GetManager().GetStream(streamID); ok && s.OutboundBuffer != nil {
-						_, _ = s.OutboundBuffer.Write(remaining)
-						// Don't set OutboundEndStream here; headers already sent separately
+					// Check windows and buffer if necessary
+					if connWin <= 0 || streamWin <= 0 || maxFrame == 0 {
+						// Cannot send now; buffer remaining data
+						if s, ok := c.processor.GetManager().GetStream(streamID); ok && s.OutboundBuffer != nil {
+							_, _ = s.OutboundBuffer.Write(remaining)
+							// Only mark as outbound end if not streaming
+							if !s.IsStreaming {
+								s.OutboundEndStream = true
+							}
+						}
+						break
 					}
-					break
-				}
 
 				allow := int(connWin)
 				if int(streamWin) < allow {
@@ -1156,6 +1334,9 @@ func (c *Connection) WriteResponse(streamID uint32, status int, headers [][2]str
 	// Write HEADERS (and CONTINUATION) respecting peer MAX_FRAME_SIZE
 	// If no body is present, we can end the stream with HEADERS (END_STREAM) to avoid zero-length DATA later
 	endStream := len(body) == 0
+	if st, ok := c.processor.GetManager().GetStream(streamID); ok && st.IsStreaming {
+		endStream = false
+	}
 	if verboseLogging {
 		c.logger.Printf("[H2] WriteResponse HEADERS: sid=%d end=%v bodyLen=%d", streamID, endStream, len(body))
 	}
@@ -1194,14 +1375,20 @@ func (c *Connection) WriteResponse(streamID uint32, status int, headers [][2]str
 			// Fast path for very small bodies that fit in a single frame
 			if len(body) <= int(maxFrame) && len(body) <= int(connWin) && len(body) <= int(streamWin) {
 				// Single frame send - most common case for JSON responses
-				if err := c.writer.WriteData(streamID, true, body); err != nil {
+				end := true
+				if st, ok := c.processor.GetManager().GetStream(streamID); ok && st.IsStreaming {
+					end = false
+				}
+				if err := c.writer.WriteData(streamID, end, body); err != nil {
 					c.writeMu.Unlock()
 					return err
 				}
 				//nolint:gosec // G115: safe conversion; body length is bounded by flow control windows
 				c.processor.GetManager().ConsumeSendWindow(streamID, int32(len(body)))
-				if st, ok := c.processor.GetManager().GetStream(streamID); ok {
-					st.SetState(stream.StateClosed)
+				if end {
+					if st, ok := c.processor.GetManager().GetStream(streamID); ok {
+						st.SetState(stream.StateClosed)
+					}
 				}
 			} else {
 				// Multi-frame path for larger bodies
@@ -1228,16 +1415,22 @@ func (c *Connection) WriteResponse(streamID uint32, status int, headers [][2]str
 					if allow <= 0 {
 						break
 					}
-					if allow > len(remaining) {
-						allow = len(remaining)
-					}
-					chunk := remaining[:allow]
-					remaining = remaining[allow:]
-					end := len(remaining) == 0 // endStream on final chunk
-					if err := c.writer.WriteData(streamID, end, chunk); err != nil {
-						c.writeMu.Unlock()
-						return err
-					}
+				if allow > len(remaining) {
+					allow = len(remaining)
+				}
+				chunk := remaining[:allow]
+				remaining = remaining[allow:]
+				// If we have remaining data, this is NOT the end of stream for this chunk
+				// If we have NO remaining data, this IS the end of stream
+				end := len(remaining) == 0
+				// If streaming, do not end stream on intermediate chunks
+				if st, ok := c.processor.GetManager().GetStream(streamID); ok && st.IsStreaming {
+					end = false
+				}
+				if err := c.writer.WriteData(streamID, end, chunk); err != nil {
+					c.writeMu.Unlock()
+					return err
+				}
 					//nolint:gosec // bounded by windows
 					c.processor.GetManager().ConsumeSendWindow(streamID, int32(len(chunk)))
 					connWin, streamWin, maxFrame = c.processor.GetManager().GetSendWindowsAndMaxFrame(streamID)
@@ -1305,8 +1498,10 @@ type connWriter struct {
 	pending  [][]byte
 	inflight bool
 	// queued holds additional frames to send after inflight batch completes.
-	queued [][]byte
-	parent *Connection
+	queued          [][]byte
+	parent          *Connection
+	closeAfterDrain bool
+	closeImmediate  bool
 }
 
 // filterFrames removes frames targeting streams that have been closed/reset.
@@ -1412,6 +1607,23 @@ func (w *connWriter) Flush() error {
 	return w.asyncSend(filtered)
 }
 
+// Close flushes any pending data and closes the connection after all data is sent (graceful).
+func (w *connWriter) Close() error {
+	w.mu.Lock()
+	w.closeAfterDrain = true
+	w.mu.Unlock()
+	return w.Flush()
+}
+
+// CloseImmediate sends pending data and immediately closes the connection in the AsyncWritev callback.
+// Use this for fatal protocol errors where we must send GOAWAY and close without waiting for further frames.
+func (w *connWriter) CloseImmediate() error {
+	w.mu.Lock()
+	w.closeImmediate = true
+	w.mu.Unlock()
+	return w.Flush()
+}
+
 // filterPartsNoCopy filters parts against closed/reset streams without copying.
 func (w *connWriter) filterPartsNoCopy(parts [][]byte) [][]byte {
 	out := make([][]byte, 0, len(parts))
@@ -1451,6 +1663,10 @@ func (w *connWriter) asyncSend(parts [][]byte) error {
 			filtered := w.filterPartsNoCopy(next)
 			if len(filtered) == 0 {
 				w.inflight = false
+				if w.closeAfterDrain || w.closeImmediate {
+					w.mu.Unlock()
+					return w.conn.Close()
+				}
 				w.mu.Unlock()
 				return nil
 			}
@@ -1459,7 +1675,12 @@ func (w *connWriter) asyncSend(parts [][]byte) error {
 			return w.asyncSend(filtered)
 		}
 		w.inflight = false
+		shouldClose := w.closeAfterDrain || w.closeImmediate
 		w.mu.Unlock()
+
+		if shouldClose {
+			return w.conn.Close()
+		}
 		return nil
 	})
 }
@@ -1490,13 +1711,13 @@ func (c *Connection) SendGoAway(lastStreamID uint32, code http2.ErrCode, debug [
 	c.logger.Printf("Sent GOAWAY frame: code=%v, lastStream=%d", code, lastStreamID)
 
 	// Signal connection should close for connection-level errors
-	// Return error so OnTraffic can return gnet.Close action
+	// Use AsyncWrite with empty data to queue a close action after the GOAWAY is sent
 	switch code {
-	case http2.ErrCodeProtocol, http2.ErrCodeFrameSize, http2.ErrCodeStreamClosed, http2.ErrCodeCompression, http2.ErrCodeFlowControl:
+	case http2.ErrCodeProtocol, http2.ErrCodeFrameSize, http2.ErrCodeStreamClosed, http2.ErrCodeCompression, http2.ErrCodeFlowControl, http2.ErrCodeInternal:
 		c.logger.Printf("Closing connection after GOAWAY with code=%v", code)
-		// Set a flag that HandleData can check to return error
-		c.sentGoAway.Store(true)
-		_ = c.conn.Close() // Also call Close() directly
+		_ = c.conn.AsyncWrite(nil, func(_ gnet.Conn, _ error) error {
+			return c.conn.Close()
+		})
 	}
 	return nil
 }

@@ -38,7 +38,13 @@ func main() {
 	log.Println("Starting CORS Example on :8080")
 	log.Println("Test with: curl -H 'Origin: http://localhost:3000' http://localhost:8080/")
 
-	if err := server.ListenAndServe(router); err != nil {
-		log.Fatal(err)
-	}
+	// Start server in a goroutine
+	go func() {
+		if err := server.ListenAndServe(router); err != nil {
+			log.Fatal(err)
+		}
+	}()
+
+	// Wait indefinitely to keep the server running
+	select {}
 }

@@ -74,6 +74,7 @@ func main() {
 	// Start server in a separate goroutine
 	go func() {
 		log.Printf("Starting server on %s", config.Addr)
+		log.Printf("MaxConnections: %d, MaxConcurrentStreams: %d", config.MaxConnections, config.MaxConcurrentStreams)
 		if err := server.ListenAndServe(router); err != nil {
 			log.Fatalf("Server error: %v", err)
 		}

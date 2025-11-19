@@ -49,7 +49,13 @@ func main() {
 	log.Println("Starting Auto Documentation Example on :8080")
 	log.Println("Visit http://localhost:8080/docs for automatic API documentation")
 
-	if err := server.ListenAndServe(router); err != nil {
-		log.Fatal(err)
-	}
+	// Start server in a goroutine
+	go func() {
+		if err := server.ListenAndServe(router); err != nil {
+			log.Fatal(err)
+		}
+	}()
+
+	// Wait indefinitely to keep the server running
+	select {}
 }

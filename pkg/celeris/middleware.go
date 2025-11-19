@@ -463,7 +463,11 @@ func DefaultRateLimiterConfig(requestsPerSecond int) RateLimiterConfig {
 			ctx.SetHeader("x-ratelimit-limit", fmt.Sprintf("%d", requestsPerSecond))
 			ctx.SetHeader("x-ratelimit-remaining", "0")
 			ctx.SetHeader("retry-after", "1")
-			return ctx.String(429, "Too Many Requests")
+			// Try to send 429 response, but don't propagate write errors
+			// If write fails, the connection is likely already in a bad state
+			_ = ctx.String(429, "Too Many Requests")
+			// Return nil to indicate we've handled the rate limit (even if write failed)
+			return nil
 		},
 	}
 }
@@ -502,7 +506,11 @@ func RateLimiterWithConfig(config RateLimiterConfig) Middleware {
 			ctx.SetHeader("x-ratelimit-limit", fmt.Sprintf("%d", config.RequestsPerSecond))
 			ctx.SetHeader("x-ratelimit-remaining", "0")
 			ctx.SetHeader("retry-after", "1")
-			return ctx.String(429, "Too Many Requests")
+			// Try to send 429 response, but don't propagate write errors
+			// If write fails, the connection is likely already in a bad state
+			_ = ctx.String(429, "Too Many Requests")
+			// Return nil to indicate we've handled the rate limit (even if write failed)
+			return nil
 		}
 	}
 
@@ -553,8 +561,13 @@ func RateLimiterWithConfig(config RateLimiterConfig) Middleware {
 			limiter.lastAccess = time.Now()
 			mu.Unlock()
 
-			// Check if request is allowed
-			if !limiter.allow() {
+			// Check if request is allowed and get remaining tokens
+			allowed, remaining := limiter.allowAndGetRemaining()
+			if remaining < 0 {
+				remaining = 0
+			}
+
+			if !allowed {
 				// Set rate limit headers
 				ctx.SetHeader("x-ratelimit-limit", fmt.Sprintf("%d", config.RequestsPerSecond))
 				ctx.SetHeader("x-ratelimit-remaining", "0")
@@ -564,10 +577,6 @@ func RateLimiterWithConfig(config RateLimiterConfig) Middleware {
 			}
 
 			// Set rate limit headers for successful requests
-			remaining := limiter.tokens
-			if remaining < 0 {
-				remaining = 0
-			}
 			ctx.SetHeader("x-ratelimit-limit", fmt.Sprintf("%d", config.RequestsPerSecond))
 			ctx.SetHeader("x-ratelimit-remaining", fmt.Sprintf("%d", remaining))
 			ctx.SetHeader("x-ratelimit-reset", fmt.Sprintf("%d", time.Now().Add(time.Second).Unix()))
@@ -600,6 +609,12 @@ func newTokenBucket(rate, burst int) *tokenBucket {
 
 // allow checks if a request is allowed and consumes a token if so
 func (tb *tokenBucket) allow() bool {
+	allowed, _ := tb.allowAndGetRemaining()
+	return allowed
+}
+
+// allowAndGetRemaining checks if a request is allowed, consumes a token if so, and returns remaining tokens
+func (tb *tokenBucket) allowAndGetRemaining() (bool, int) {
 	tb.mu.Lock()
 	defer tb.mu.Unlock()
 
@@ -607,7 +622,11 @@ func (tb *tokenBucket) allow() bool {
 
 	// Refill tokens based on time elapsed
 	elapsed := now.Sub(tb.lastRefill)
-	tokensToAdd := int(float64(elapsed.Nanoseconds()) / float64(time.Second) * float64(tb.refillRate))
+
+	// Calculate tokens to add: elapsed seconds * refill rate
+	// Use seconds as float64 for precision, then convert to int
+	elapsedSeconds := elapsed.Seconds()
+	tokensToAdd := int(elapsedSeconds * float64(tb.refillRate))
 
 	if tokensToAdd > 0 {
 		tb.tokens += tokensToAdd
@@ -620,10 +639,14 @@ func (tb *tokenBucket) allow() bool {
 	// Check if we have tokens available
 	if tb.tokens > 0 {
 		tb.tokens--
-		return true
+		remaining := tb.tokens
+		if remaining < 0 {
+			remaining = 0
+		}
+		return true, remaining
 	}
 
-	return false
+	return false, 0
 }
 
 // HealthConfig holds configuration for the Health middleware.

@@ -61,7 +61,13 @@ func main() {
 	log.Println("Starting Server Push Example on :8080")
 	log.Println("Visit http://localhost:8080/ to see server push in action")
 
-	if err := server.ListenAndServe(router); err != nil {
-		log.Fatal(err)
-	}
+	// Start server in a goroutine
+	go func() {
+		if err := server.ListenAndServe(router); err != nil {
+			log.Fatal(err)
+		}
+	}()
+
+	// Wait indefinitely to keep the server running
+	select {}
 }

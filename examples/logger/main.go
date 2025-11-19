@@ -81,7 +81,13 @@ func main() {
 	log.Println("")
 	log.Println("All requests will be logged in structured JSON format to stdout")
 
-	if err := server.ListenAndServe(router); err != nil {
-		log.Fatal(err)
-	}
+	// Start server in a goroutine
+	go func() {
+		if err := server.ListenAndServe(router); err != nil {
+			log.Fatal(err)
+		}
+	}()
+
+	// Wait indefinitely to keep the server running
+	select {}
 }

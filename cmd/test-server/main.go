@@ -4,6 +4,9 @@ package main
 import (
 	"fmt"
 	"log"
+	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/albertbausili/celeris/pkg/celeris"
 )
@@ -29,14 +32,28 @@ func main() {
 	})
 
 	config := celeris.DefaultConfig()
-	config.Addr = ":18080"
+	config.Addr = ":18081"
+	// Enable HTTP/2 only for h2spec testing
+	config.EnableH1 = false
+	config.EnableH2 = true
 	// Set concurrency limit for h2spec
 	config.MaxConcurrentStreams = 100
 
 	server := celeris.New(config)
 
-	fmt.Println("Test server running on :18080")
-	if err := server.ListenAndServe(router); err != nil {
-		log.Fatal(err)
-	}
+	fmt.Println("Test server running on :18081 (HTTP/2 only)")
+
+	// Start server in a goroutine
+	go func() {
+		if err := server.ListenAndServe(router); err != nil {
+			log.Fatal(err)
+		}
+	}()
+
+	// Wait for interrupt signal to gracefully shutdown
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	<-quit
+
+	log.Println("Shutting down server...")
 }

@@ -111,7 +111,13 @@ func main() {
 	log.Println("Each request will get a unique X-Request-ID header")
 	log.Println("Check the console logs to see request IDs in action")
 
-	if err := server.ListenAndServe(router); err != nil {
-		log.Fatal(err)
-	}
+	// Start server in a goroutine
+	go func() {
+		if err := server.ListenAndServe(router); err != nil {
+			log.Fatal(err)
+		}
+	}()
+
+	// Wait indefinitely to keep the server running
+	select {}
 }

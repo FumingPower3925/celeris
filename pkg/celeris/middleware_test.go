@@ -317,9 +317,12 @@ func TestTimeout_Exceeded(t *testing.T) {
 	// Add variables to capture response data
 	var capturedStatus int
 	var capturedBody []byte
+	var mu sync.Mutex
 
 	// Add mock write response function
 	writeResponseFunc := func(_ uint32, status int, _ [][2]string, body []byte) error {
+		mu.Lock()
+		defer mu.Unlock()
 		capturedStatus = status
 		capturedBody = body
 		return nil
@@ -332,12 +335,17 @@ func TestTimeout_Exceeded(t *testing.T) {
 	}
 
 	// Check that timeout response was set
-	if capturedStatus != 504 {
-		t.Errorf("Expected status 504 for timeout, got %d", capturedStatus)
+	mu.Lock()
+	status := capturedStatus
+	body := capturedBody
+	mu.Unlock()
+
+	if status != 504 {
+		t.Errorf("Expected status 504 for timeout, got %d", status)
 	}
 
-	if !strings.Contains(string(capturedBody), "Gateway Timeout") {
-		t.Errorf("Expected 'Gateway Timeout' in response, got %s", string(capturedBody))
+	if !strings.Contains(string(body), "Gateway Timeout") {
+		t.Errorf("Expected 'Gateway Timeout' in response, got %s", string(body))
 	}
 }
 

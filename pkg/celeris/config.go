@@ -4,6 +4,7 @@ package celeris
 import (
 	"io"
 	"log"
+	"runtime"
 	"time"
 )
 
@@ -18,6 +19,7 @@ type Config struct {
 	IdleTimeout          time.Duration // Maximum idle time before connection close
 	MaxHeaderBytes       int           // Maximum header size in bytes
 	MaxConcurrentStreams uint32        // Maximum concurrent HTTP/2 streams
+	MaxConnections       uint32        // Maximum concurrent connections
 	MaxFrameSize         uint32        // Maximum HTTP/2 frame size
 	InitialWindowSize    uint32        // Initial HTTP/2 flow control window size
 	Logger               *log.Logger   // Logger for server events
@@ -33,18 +35,23 @@ func newSilentLogger() *log.Logger {
 
 // DefaultConfig returns a Config with sensible default values.
 func DefaultConfig() Config {
+	// Calculate adaptive limits based on system resources
+	maxConnections := calculateOptimalConnections()
+	maxStreams := maxConnections * 2 // Allow 2 streams per connection
+
 	return Config{
 		Addr:                 ":8080",
 		Multicore:            true,
 		NumEventLoop:         0, // Auto-detect
 		ReusePort:            true,
-		ReadTimeout:          30 * time.Second,
-		WriteTimeout:         30 * time.Second,
-		IdleTimeout:          60 * time.Second,
-		MaxHeaderBytes:       1 << 20, // 1 MB
-		MaxConcurrentStreams: 100,
-		MaxFrameSize:         16384,
-		InitialWindowSize:    65535,
+		ReadTimeout:          300 * time.Second, // Increased for high RPS stability
+		WriteTimeout:         300 * time.Second, // Increased for high RPS stability
+		IdleTimeout:          600 * time.Second, // Increased for better connection reuse
+		MaxHeaderBytes:       16 << 20,          // 16 MB for high RPS
+		MaxConcurrentStreams: maxStreams,        // Adaptive based on system resources
+		MaxConnections:       maxConnections,    // Adaptive based on system resources
+		MaxFrameSize:         262144,            // 256 KB for high throughput
+		InitialWindowSize:    1048576,           // 1 MB for better flow control
 		Logger:               newSilentLogger(),
 		DisableKeepAlive:     false,
 		EnableH1:             true, // Enable HTTP/1.1 by default
@@ -67,7 +74,10 @@ func (c *Config) Validate() error {
 		c.InitialWindowSize = 65535
 	}
 	if c.MaxConcurrentStreams == 0 {
-		c.MaxConcurrentStreams = 100
+		c.MaxConcurrentStreams = 20000 // Increased default
+	}
+	if c.MaxConnections == 0 {
+		c.MaxConnections = 20000 // Increased default
 	}
 	if c.Logger == nil {
 		c.Logger = log.Default()
@@ -77,4 +87,30 @@ func (c *Config) Validate() error {
 		c.EnableH2 = true // Default to HTTP/2 if both disabled
 	}
 	return nil
+}
+
+// calculateOptimalConnections calculates the optimal number of connections based on system resources
+func calculateOptimalConnections() uint32 {
+	// Get system information
+	numCPU := runtime.NumCPU()
+
+	// Base calculation: 10000 connections per CPU core for high RPS
+	// Convert to uint32 first to avoid potential overflow in multiplication
+	//nolint:gosec // NumCPU() returns reasonable values (< 65536), so uint32 conversion is safe
+	baseConnections := uint32(numCPU) * 10000
+
+	// Cap at very high limits for 150k-200k RPS capability
+	maxConnections := uint32(500000) // Maximum 500k connections for high RPS
+
+	if baseConnections > maxConnections {
+		baseConnections = maxConnections
+	}
+
+	// Ensure minimum connections for high performance
+	minConnections := uint32(100000) // Minimum 100k connections
+	if baseConnections < minConnections {
+		baseConnections = minConnections
+	}
+
+	return baseConnections
 }

@@ -67,9 +67,16 @@ func main() {
 	log.Println("  GET http://localhost:8080/slow")
 	log.Println("  GET http://localhost:8080/headers")
 	log.Println("")
-	log.Println("Make multiple requests quickly to see rate limiting in action")
+	log.Println("To test rate limiting, run in another terminal:")
+	log.Println("  cd examples/rate-limiting && go run test_client.go")
 
-	if err := server.ListenAndServe(router); err != nil {
-		log.Fatal(err)
-	}
+	// Start server in a goroutine
+	go func() {
+		if err := server.ListenAndServe(router); err != nil {
+			log.Fatal(err)
+		}
+	}()
+
+	// Wait indefinitely to keep the server running
+	select {}
 }

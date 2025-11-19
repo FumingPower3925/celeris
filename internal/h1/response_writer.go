@@ -269,9 +269,20 @@ func (w *ResponseWriter) flush() error {
 
 	// Vectorized async write to minimize syscalls
 	relThis := rel
+	totalBytes := 0
+	for _, b := range batch {
+		totalBytes += len(b)
+	}
+	if w.logger != nil {
+		w.logger.Printf("[ResponseWriter] Queuing AsyncWritev: %d bytes in %d buffers", totalBytes, len(batch))
+	}
 	return w.conn.AsyncWritev(batch, func(_ gnet.Conn, err error) error {
-		if err != nil && w.logger != nil {
-			w.logger.Printf("AsyncWritev callback error: %v", err)
+		if w.logger != nil {
+			if err != nil {
+				w.logger.Printf("[ResponseWriter] AsyncWritev completed with error: %v", err)
+			} else {
+				w.logger.Printf("[ResponseWriter] AsyncWritev completed successfully: %d bytes", totalBytes)
+			}
 		}
 
 		// Release pooled buffers used in this batch

@@ -20,32 +20,33 @@ func TestDefaultConfig(t *testing.T) {
 		t.Error("Expected ReusePort to be true by default")
 	}
 
-	if config.ReadTimeout != 30*time.Second {
-		t.Errorf("Expected ReadTimeout 30s, got %v", config.ReadTimeout)
+	if config.ReadTimeout != 300*time.Second {
+		t.Errorf("Expected ReadTimeout 300s, got %v", config.ReadTimeout)
 	}
 
-	if config.WriteTimeout != 30*time.Second {
-		t.Errorf("Expected WriteTimeout 30s, got %v", config.WriteTimeout)
+	if config.WriteTimeout != 300*time.Second {
+		t.Errorf("Expected WriteTimeout 300s, got %v", config.WriteTimeout)
 	}
 
-	if config.IdleTimeout != 60*time.Second {
-		t.Errorf("Expected IdleTimeout 60s, got %v", config.IdleTimeout)
+	if config.IdleTimeout != 600*time.Second {
+		t.Errorf("Expected IdleTimeout 600s, got %v", config.IdleTimeout)
 	}
 
-	if config.MaxHeaderBytes != 1<<20 {
-		t.Errorf("Expected MaxHeaderBytes 1MB, got %d", config.MaxHeaderBytes)
+	if config.MaxHeaderBytes != 16<<20 {
+		t.Errorf("Expected MaxHeaderBytes 16MB, got %d", config.MaxHeaderBytes)
 	}
 
-	if config.MaxConcurrentStreams != 100 {
-		t.Errorf("Expected MaxConcurrentStreams 100, got %d", config.MaxConcurrentStreams)
+	// MaxConcurrentStreams is now adaptive, just check it's set (should be > 0)
+	if config.MaxConcurrentStreams == 0 {
+		t.Errorf("Expected MaxConcurrentStreams > 0, got %d", config.MaxConcurrentStreams)
 	}
 
-	if config.MaxFrameSize != 16384 {
-		t.Errorf("Expected MaxFrameSize 16384, got %d", config.MaxFrameSize)
+	if config.MaxFrameSize != 262144 {
+		t.Errorf("Expected MaxFrameSize 262144, got %d", config.MaxFrameSize)
 	}
 
-	if config.InitialWindowSize != 65535 {
-		t.Errorf("Expected InitialWindowSize 65535, got %d", config.InitialWindowSize)
+	if config.InitialWindowSize != 1048576 {
+		t.Errorf("Expected InitialWindowSize 1048576, got %d", config.InitialWindowSize)
 	}
 
 	if config.Logger == nil {
@@ -114,8 +115,9 @@ func TestConfig_Validate(t *testing.T) {
 				MaxConcurrentStreams: 0,
 			},
 			validate: func(t *testing.T, c Config) {
-				if c.MaxConcurrentStreams != 100 {
-					t.Errorf("Expected MaxConcurrentStreams 100, got %d", c.MaxConcurrentStreams)
+				// Validate sets it to 20000 by default
+				if c.MaxConcurrentStreams != 20000 {
+					t.Errorf("Expected MaxConcurrentStreams 20000, got %d", c.MaxConcurrentStreams)
 				}
 			},
 		},
@@ -180,4 +182,3 @@ func TestConfig_CustomValues(t *testing.T) {
 		t.Errorf("Expected MaxConcurrentStreams 200, got %d", config.MaxConcurrentStreams)
 	}
 }
-

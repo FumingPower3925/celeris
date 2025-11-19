@@ -3,6 +3,9 @@ package main
 
 import (
 	"log"
+	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/albertbausili/celeris/pkg/celeris"
 )
@@ -64,7 +67,17 @@ func main() {
 	log.Println("Starting Basic Routing Example on :8080")
 	log.Println("Try: /users/123, /users/123/posts/456, /api/v1/users, /search?q=test")
 
-	if err := server.ListenAndServe(router); err != nil {
-		log.Fatal(err)
-	}
+	// Start server in a goroutine
+	go func() {
+		if err := server.ListenAndServe(router); err != nil {
+			log.Fatal(err)
+		}
+	}()
+
+	// Wait for interrupt signal to gracefully shutdown
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	<-quit
+
+	log.Println("Shutting down server...")
 }

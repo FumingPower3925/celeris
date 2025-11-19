@@ -390,6 +390,10 @@ func (c *Context) Redirect(status int, url string) error {
 
 // flush sends the response headers and body to the client.
 func (c *Context) flush() error {
+	// If already flushed, don't flush again (e.g., when ctx.String() already flushed)
+	if c.hasFlushed {
+		return nil
+	}
 	if c.writeResponse == nil {
 		return fmt.Errorf("no write response function")
 	}
@@ -505,21 +509,28 @@ func (c *Context) Flush() error {
 	if c.writeResponse == nil {
 		return fmt.Errorf("no write response function")
 	}
-	// Copy current buffer to avoid losing previous chunks when reusing buffer
-	data := append([]byte(nil), c.responseBody.Bytes()...)
+
 	// Ensure Transfer-Encoding semantics for streaming: no Content-Length once streaming starts
-	// Remove content-length header to prevent peers from expecting a fixed length
 	c.responseHeaders.Del("content-length")
+
 	// Mark underlying stream as streaming to prevent END_STREAM on intermediate chunks
 	if c.stream != nil {
 		c.stream.IsStreaming = true
 	}
-	// Accumulate data; defer actual send to final flush for robustness
-	c.streamBuffer = append(c.streamBuffer, data...)
-	// Do not send now; just mark flushed and reset buffer
-	var err error
+
+	// Send accumulated data immediately
+	body := c.responseBody.Bytes()
+	err := c.writeResponse(c.StreamID, c.statusCode, c.responseHeaders.All(), body)
+
+	// Reset buffer and mark as flushed
 	c.responseBody.Reset()
 	c.hasFlushed = true
+
+	// Clear streamBuffer if it was used (legacy support)
+	if len(c.streamBuffer) > 0 {
+		c.streamBuffer = c.streamBuffer[:0]
+	}
+
 	return err
 }
 

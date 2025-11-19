@@ -15,6 +15,7 @@ bin/
 *.dylib
 main
 test-server
+celeris-test
 
 # Ignore binaries and build artifacts without file extensions
 bench_test

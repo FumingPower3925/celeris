@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/albertbausili/celeris/internal/h1"
 	"github.com/albertbausili/celeris/internal/h2/stream"
+	h2transport "github.com/albertbausili/celeris/internal/h2/transport"
 	"github.com/albertbausili/celeris/internal/mux"
 )
 
@@ -12,7 +14,13 @@ import (
 type Server struct {
 	config    Config
 	handler   Handler
-	transport *mux.Server
+	transport interface {
+		Start() error
+		Stop(context.Context) error
+	}
+	h1Server  *h1.Server
+	h2Server  *h2transport.Server
+	muxServer *mux.Server
 }
 
 // New creates a new Server with the provided configuration.
@@ -53,17 +61,48 @@ func (s *Server) Start() error {
 		handler: s.handler,
 	}
 
-	s.transport = mux.NewServer(streamHandler, mux.Config{
+	ctx := context.Background()
+
+	// When only one protocol is enabled, bypass the mux for better performance
+	if s.config.EnableH1 && !s.config.EnableH2 {
+		// HTTP/1.1 only - use direct server
+		s.h1Server = h1.NewServerWithConfig(ctx, streamHandler, h1.Config{
+			Addr:           s.config.Addr,
+			Multicore:      s.config.Multicore,
+			NumEventLoop:   s.config.NumEventLoop,
+			ReusePort:      s.config.ReusePort,
+			Logger:         s.config.Logger,
+			MaxConnections: s.config.MaxConnections,
+		})
+		s.transport = s.h1Server
+		return s.transport.Start()
+	} else if s.config.EnableH2 && !s.config.EnableH1 {
+		// HTTP/2 only - use direct server
+		s.h2Server = h2transport.NewServer(streamHandler, h2transport.Config{
+			Addr:                 s.config.Addr,
+			Multicore:            s.config.Multicore,
+			NumEventLoop:         s.config.NumEventLoop,
+			ReusePort:            s.config.ReusePort,
+			Logger:               s.config.Logger,
+			MaxConcurrentStreams: s.config.MaxConcurrentStreams,
+			MaxConnections:       s.config.MaxConnections,
+		})
+		s.transport = s.h2Server
+		return s.transport.Start()
+	}
+	// Both protocols enabled - use mux
+	s.muxServer = mux.NewServer(streamHandler, mux.Config{
 		Addr:                 s.config.Addr,
 		Multicore:            s.config.Multicore,
 		NumEventLoop:         s.config.NumEventLoop,
 		ReusePort:            s.config.ReusePort,
 		Logger:               s.config.Logger,
 		MaxConcurrentStreams: s.config.MaxConcurrentStreams,
+		MaxConnections:       s.config.MaxConnections,
 		EnableH1:             s.config.EnableH1,
 		EnableH2:             s.config.EnableH2,
 	})
-
+	s.transport = s.muxServer
 	return s.transport.Start()
 }
 

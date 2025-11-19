@@ -70,7 +70,13 @@ func main() {
 	log.Println("Visit http://localhost:8080/events for SSE")
 	log.Println("Visit http://localhost:8080/stream for streaming")
 
-	if err := server.ListenAndServe(router); err != nil {
-		log.Fatal(err)
-	}
+	// Start server in a goroutine
+	go func() {
+		if err := server.ListenAndServe(router); err != nil {
+			log.Fatal(err)
+		}
+	}()
+
+	// Wait indefinitely to keep the server running
+	select {}
 }

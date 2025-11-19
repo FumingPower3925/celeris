@@ -6,7 +6,9 @@ import (
 	"bytes"
 	"context"
 	"log"
+	"runtime"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/albertbausili/celeris/internal/h1"
@@ -43,8 +45,15 @@ type Server struct {
 	engine        gnet.Engine
 	engineStarted bool
 
-	enableH1 bool
-	enableH2 bool
+	enableH1       bool
+	enableH2       bool
+	maxConnections uint32
+	activeConns    uint32 // Atomic counter for active connections
+
+	// Connection queuing for backpressure
+	connectionQueue chan gnet.Conn
+	queueSize       int
+	queueMu         sync.RWMutex
 }
 
 // verboseConnLogging controls per-connection logging to avoid formatting overhead under load.
@@ -79,6 +88,7 @@ type Config struct {
 	ReusePort            bool
 	Logger               *log.Logger
 	MaxConcurrentStreams uint32
+	MaxConnections       uint32 // Maximum concurrent connections
 	EnableH1             bool
 	EnableH2             bool
 }
@@ -96,17 +106,27 @@ func NewServer(handler stream.Handler, config Config) *Server {
 		config.EnableH2 = true
 	}
 
+	// Set default max connections if not specified
+	if config.MaxConnections == 0 {
+		config.MaxConnections = 10000 // Default to 10k connections
+	}
+
 	s := &Server{
-		handler:      handler,
-		ctx:          ctx,
-		cancel:       cancel,
-		addr:         config.Addr,
-		multicore:    config.Multicore,
-		numEventLoop: config.NumEventLoop,
-		reusePort:    config.ReusePort,
-		logger:       config.Logger,
-		enableH1:     config.EnableH1,
-		enableH2:     config.EnableH2,
+		handler:        handler,
+		ctx:            ctx,
+		cancel:         cancel,
+		addr:           config.Addr,
+		multicore:      config.Multicore,
+		numEventLoop:   config.NumEventLoop,
+		reusePort:      config.ReusePort,
+		logger:         config.Logger,
+		enableH1:       config.EnableH1,
+		enableH2:       config.EnableH2,
+		maxConnections: config.MaxConnections,
+		activeConns:    0,
+		// Initialize connection queue with 10% of max connections as buffer
+		connectionQueue: make(chan gnet.Conn, config.MaxConnections/10),
+		queueSize:       int(config.MaxConnections / 10),
 	}
 
 	// Create HTTP/2 server if enabled
@@ -118,6 +138,7 @@ func NewServer(handler stream.Handler, config Config) *Server {
 			ReusePort:            config.ReusePort,
 			Logger:               config.Logger,
 			MaxConcurrentStreams: config.MaxConcurrentStreams,
+			MaxConnections:       config.MaxConnections,
 		})
 	}
 
@@ -134,13 +155,24 @@ func (s *Server) Start() error {
 	options := []gnet.Option{
 		gnet.WithMulticore(s.multicore),
 		gnet.WithReusePort(s.reusePort),
-		// Prefer low-latency writes for small responses
+		// Optimize for high throughput
 		gnet.WithTCPNoDelay(gnet.TCPNoDelay),
-		// Hint gnet to enlarge read/write buffers to reduce syscalls under load
-		gnet.WithSocketRecvBuffer(1 << 20), // 1 MiB
-		gnet.WithSocketSendBuffer(1 << 20), // 1 MiB
-		// Use silent logger to hide gnet internal messages
+		// Massive buffer sizes for maximum RPS
+		gnet.WithSocketRecvBuffer(64 << 20), // 64 MiB for extreme performance
+		gnet.WithSocketSendBuffer(64 << 20), // 64 MiB for extreme performance
+		// Extended keep-alive for connection reuse
+		gnet.WithTCPKeepAlive(time.Minute * 30), // Extended keep-alive
+		// Use silent logger to eliminate I/O overhead
 		gnet.WithLogger(silentGnetLogger{}),
+		// Maximum concurrency settings
+		gnet.WithLockOSThread(false), // Allow better load balancing
+		// Large buffers for high RPS
+		gnet.WithReadBufferCap(1024 << 10),  // 1 MB read buffer
+		gnet.WithWriteBufferCap(1024 << 10), // 1 MB write buffer
+		// Enable all performance optimizations
+		gnet.WithTicker(true),                   // Enable ticker
+		gnet.WithLoadBalancing(gnet.RoundRobin), // Optimize load balancing
+		gnet.WithNumEventLoop(runtime.NumCPU()), // Use all CPU cores
 	}
 
 	if s.numEventLoop > 0 {
@@ -158,7 +190,14 @@ func (s *Server) Start() error {
 	}
 
 	s.logger.Printf("Starting server on %s (%s)", s.addr, protocols)
-	return gnet.Run(s, "tcp://"+s.addr, options...)
+	s.logger.Printf("Server is listening on %s (multicore: %v)", s.addr, s.multicore)
+
+	// Start the server in a goroutine since gnet.Run is blocking
+	go func() {
+		_ = gnet.Run(s, "tcp://"+s.addr, options...)
+	}()
+
+	return nil
 }
 
 // Stop gracefully stops the server.
@@ -198,25 +237,100 @@ func (s *Server) OnBoot(eng gnet.Engine) gnet.Action {
 	}
 
 	s.logger.Printf("Server is listening on %s (multicore: %v)", s.addr, s.multicore)
+
+	// Start connection queue processor
+	go s.processConnectionQueue()
+
 	return gnet.None
 }
 
 // OnOpen is called when a new connection is opened.
 func (s *Server) OnOpen(c gnet.Conn) ([]byte, gnet.Action) {
+	// Check connection limit BEFORE incrementing counter to avoid race condition
+	currentConns := atomic.LoadUint32(&s.activeConns)
+	if currentConns >= s.maxConnections {
+		// Try to queue the connection if we have space
+		s.queueMu.RLock()
+		queueLen := len(s.connectionQueue)
+		s.queueMu.RUnlock()
+
+		if queueLen < s.queueSize {
+			// Queue the connection for later processing
+			select {
+			case s.connectionQueue <- c:
+				s.logger.Printf("Connection queued from %s (queue: %d/%d, active: %d/%d)",
+					c.RemoteAddr().String(), queueLen+1, s.queueSize, currentConns, s.maxConnections)
+				return nil, gnet.None
+			default:
+				// Queue is full, reject connection
+			}
+		}
+
+		// Reject connection - send 503 Service Unavailable
+		s.logger.Printf("Connection rejected from %s: too many connections (%d/%d, queue: %d/%d)",
+			c.RemoteAddr().String(), currentConns, s.maxConnections, queueLen, s.queueSize)
+
+		// Send HTTP 503 response before closing
+		response := "HTTP/1.1 503 Service Unavailable\r\n" +
+			"Content-Type: text/plain\r\n" +
+			"Content-Length: 19\r\n" +
+			"Connection: close\r\n" +
+			"\r\n" +
+			"Service Unavailable"
+
+		return []byte(response), gnet.Close
+	}
+
+	// Now safely increment the counter
+	atomic.AddUint32(&s.activeConns, 1)
+
 	session := &connSession{
 		buffer: make([]byte, 0, minDetectBytes),
 	}
 	s.connections.Store(c, session)
 	if verboseConnLogging {
-		s.logger.Printf("New connection from %s", c.RemoteAddr().String())
+		s.logger.Printf("New connection from %s (%d/%d active)",
+			c.RemoteAddr().String(), currentConns+1, s.maxConnections)
 	}
 	return nil, gnet.None
+}
+
+// processConnectionQueue processes queued connections when capacity becomes available
+func (s *Server) processConnectionQueue() {
+	for {
+		select {
+		case <-s.ctx.Done():
+			return
+		case queuedConn := <-s.connectionQueue:
+			// Check if we can accept this connection now
+			currentConns := atomic.LoadUint32(&s.activeConns)
+			if currentConns < s.maxConnections {
+				// Accept the queued connection
+				atomic.AddUint32(&s.activeConns, 1)
+
+				session := &connSession{
+					buffer: make([]byte, 0, minDetectBytes),
+				}
+				s.connections.Store(queuedConn, session)
+
+				s.logger.Printf("Queued connection accepted from %s (%d/%d active)",
+					queuedConn.RemoteAddr().String(), currentConns+1, s.maxConnections)
+			} else {
+				// Still no capacity, close the queued connection
+				s.logger.Printf("Queued connection rejected from %s: still no capacity (%d/%d)",
+					queuedConn.RemoteAddr().String(), currentConns, s.maxConnections)
+				_ = queuedConn.Close()
+			}
+		}
+	}
 }
 
 // OnClose is called when a connection is closed.
 func (s *Server) OnClose(c gnet.Conn, err error) gnet.Action {
 	sessionValue, ok := s.connections.Load(c)
 	if !ok {
+		// Connection wasn't tracked, still decrement counter to be safe
+		atomic.AddUint32(&s.activeConns, ^uint32(0)) // Decrement counter
 		return gnet.None
 	}
 
@@ -233,11 +347,16 @@ func (s *Server) OnClose(c gnet.Conn, err error) gnet.Action {
 
 	s.connections.Delete(c)
 
+	// Decrement active connection counter
+	currentConns := atomic.AddUint32(&s.activeConns, ^uint32(0)) // Decrement counter
+
 	if verboseConnLogging {
 		if err != nil {
-			s.logger.Printf("Connection closed with error: %v", err)
+			s.logger.Printf("Connection closed with error: %v (%d/%d active)",
+				err, currentConns, s.maxConnections)
 		} else {
-			s.logger.Printf("Connection closed from %s", c.RemoteAddr().String())
+			s.logger.Printf("Connection closed from %s (%d/%d active)",
+				c.RemoteAddr().String(), currentConns, s.maxConnections)
 		}
 	}
 
@@ -252,33 +371,72 @@ func (s *Server) OnTraffic(c gnet.Conn) gnet.Action {
 	sessionValue, ok := s.connections.Load(c)
 	if !ok {
 		s.logger.Printf("Connection not found in map")
-		return gnet.Close
+		// Send 400 Bad Request instead of closing
+		response := "HTTP/1.1 400 Bad Request\r\n" +
+			"Content-Type: text/plain\r\n" +
+			"Content-Length: 12\r\n" +
+			"Connection: close\r\n" +
+			"\r\n" +
+			"Bad Request"
+		_ = c.AsyncWrite([]byte(response), func(_ gnet.Conn, _ error) error {
+			// Close connection after sending response
+			_ = c.Close()
+			return nil
+		})
+		return gnet.None
 	}
 
 	session := sessionValue.(*connSession)
 
 	if !session.detected {
-		// Still detecting protocol
+		// Still detecting protocol - use non-blocking approach
 		buf, err := c.Next(-1)
 		if err != nil {
 			s.logger.Printf("Error reading data: %v", err)
-			return gnet.Close
+			// Send 400 Bad Request instead of closing
+			response := "HTTP/1.1 400 Bad Request\r\n" +
+				"Content-Type: text/plain\r\n" +
+				"Content-Length: 12\r\n" +
+				"Connection: close\r\n" +
+				"\r\n" +
+				"Bad Request"
+			_ = c.AsyncWrite([]byte(response), func(_ gnet.Conn, _ error) error {
+				// Close connection after sending response
+				_ = c.Close()
+				return nil
+			})
+			return gnet.None
+		}
+		if len(buf) == 0 {
+			return gnet.None
 		}
 
 		session.buffer = append(session.buffer, buf...)
 
-		// Try to detect protocol
+		// Try to detect protocol - optimized for high performance
 		if len(session.buffer) >= minDetectBytes {
-			// Check if this starts with valid HTTP/1.1 request line (GET, POST, etc)
-			isLikelyH1 := bytes.HasPrefix(session.buffer, []byte("GET ")) ||
-				bytes.HasPrefix(session.buffer, []byte("POST ")) ||
-				bytes.HasPrefix(session.buffer, []byte("PUT ")) ||
-				bytes.HasPrefix(session.buffer, []byte("DELETE ")) ||
-				bytes.HasPrefix(session.buffer, []byte("HEAD ")) ||
-				bytes.HasPrefix(session.buffer, []byte("OPTIONS ")) ||
-				bytes.HasPrefix(session.buffer, []byte("PATCH ")) ||
-				bytes.HasPrefix(session.buffer, []byte("TRACE ")) ||
-				bytes.HasPrefix(session.buffer, []byte("CONNECT "))
+			// Fast protocol detection using first byte for performance
+			firstByte := session.buffer[0]
+			var isLikelyH1 bool
+
+			switch firstByte {
+			case 'G': // GET
+				isLikelyH1 = bytes.HasPrefix(session.buffer, []byte("GET "))
+			case 'P': // POST, PUT, PATCH
+				isLikelyH1 = bytes.HasPrefix(session.buffer, []byte("POST ")) ||
+					bytes.HasPrefix(session.buffer, []byte("PUT ")) ||
+					bytes.HasPrefix(session.buffer, []byte("PATCH "))
+			case 'H': // HEAD
+				isLikelyH1 = bytes.HasPrefix(session.buffer, []byte("HEAD "))
+			case 'D': // DELETE
+				isLikelyH1 = bytes.HasPrefix(session.buffer, []byte("DELETE "))
+			case 'O': // OPTIONS
+				isLikelyH1 = bytes.HasPrefix(session.buffer, []byte("OPTIONS "))
+			case 'T': // TRACE
+				isLikelyH1 = bytes.HasPrefix(session.buffer, []byte("TRACE "))
+			case 'C': // CONNECT
+				isLikelyH1 = bytes.HasPrefix(session.buffer, []byte("CONNECT "))
+			}
 
 			// Check for HTTP/2 preface - might be starting but incomplete
 			mightBeH2 := bytes.HasPrefix(session.buffer, []byte("PRI "))
@@ -298,7 +456,19 @@ func (s *Server) OnTraffic(c gnet.Conn) gnet.Action {
 						time.AfterFunc(5*time.Millisecond, func() { _ = c.Close() })
 						return gnet.None
 					}
-					return gnet.Close
+					// Send 400 Bad Request for invalid HTTP/2 preface
+					response := "HTTP/1.1 400 Bad Request\r\n" +
+						"Content-Type: text/plain\r\n" +
+						"Content-Length: 12\r\n" +
+						"Connection: close\r\n" +
+						"\r\n" +
+						"Bad Request"
+					_ = c.AsyncWrite([]byte(response), func(_ gnet.Conn, _ error) error {
+						// Close connection after sending response
+						_ = c.Close()
+						return nil
+					})
+					return gnet.None
 				}
 			}
 			isH2 := len(session.buffer) >= len(http2Preface) && bytes.HasPrefix(session.buffer, []byte(http2Preface))
@@ -308,7 +478,19 @@ func (s *Server) OnTraffic(c gnet.Conn) gnet.Action {
 				// HTTP/2 detected
 				if !s.enableH2 {
 					s.logger.Printf("HTTP/2 connection rejected (H2 disabled)")
-					return gnet.Close
+					// Send 400 Bad Request instead of closing
+					response := "HTTP/1.1 400 Bad Request\r\n" +
+						"Content-Type: text/plain\r\n" +
+						"Content-Length: 12\r\n" +
+						"Connection: close\r\n" +
+						"\r\n" +
+						"Bad Request"
+					_ = c.AsyncWrite([]byte(response), func(_ gnet.Conn, _ error) error {
+						// Close connection after sending response
+						_ = c.Close()
+						return nil
+					})
+					return gnet.None
 				}
 
 				session.detected = true
@@ -328,7 +510,19 @@ func (s *Server) OnTraffic(c gnet.Conn) gnet.Action {
 				// Process buffered data
 				if err := session.h2Conn.HandleData(s.ctx, session.buffer); err != nil {
 					s.logger.Printf("Error handling H2 data: %v", err)
-					return gnet.Close
+					// Send 400 Bad Request instead of closing
+					response := "HTTP/1.1 400 Bad Request\r\n" +
+						"Content-Type: text/plain\r\n" +
+						"Content-Length: 12\r\n" +
+						"Connection: close\r\n" +
+						"\r\n" +
+						"Bad Request"
+					_ = c.AsyncWrite([]byte(response), func(_ gnet.Conn, _ error) error {
+						// Close connection after sending response
+						_ = c.Close()
+						return nil
+					})
+					return gnet.None
 				}
 
 				session.buffer = nil
@@ -336,7 +530,19 @@ func (s *Server) OnTraffic(c gnet.Conn) gnet.Action {
 				// HTTP/1.1 detected (valid HTTP method detected)
 				if !s.enableH1 {
 					s.logger.Printf("HTTP/1.1 connection rejected (H1 disabled)")
-					return gnet.Close
+					// Send 400 Bad Request instead of closing
+					response := "HTTP/1.1 400 Bad Request\r\n" +
+						"Content-Type: text/plain\r\n" +
+						"Content-Length: 12\r\n" +
+						"Connection: close\r\n" +
+						"\r\n" +
+						"Bad Request"
+					_ = c.AsyncWrite([]byte(response), func(_ gnet.Conn, _ error) error {
+						// Close connection after sending response
+						_ = c.Close()
+						return nil
+					})
+					return gnet.None
 				}
 
 				session.detected = true
@@ -351,7 +557,19 @@ func (s *Server) OnTraffic(c gnet.Conn) gnet.Action {
 				// Process buffered data
 				if err := session.h1Conn.HandleData(session.buffer); err != nil {
 					s.logger.Printf("Error handling H1 data: %v", err)
-					return gnet.Close
+					// Send 400 Bad Request instead of closing
+					response := "HTTP/1.1 400 Bad Request\r\n" +
+						"Content-Type: text/plain\r\n" +
+						"Content-Length: 12\r\n" +
+						"Connection: close\r\n" +
+						"\r\n" +
+						"Bad Request"
+					_ = c.AsyncWrite([]byte(response), func(_ gnet.Conn, _ error) error {
+						// Close connection after sending response
+						_ = c.Close()
+						return nil
+					})
+					return gnet.None
 				}
 
 				session.buffer = nil
@@ -361,7 +579,19 @@ func (s *Server) OnTraffic(c gnet.Conn) gnet.Action {
 					// We have enough bytes but it's not valid HTTP/2
 					// Delegate invalid preface handling to H2 transport for compliant GOAWAY
 					if !s.enableH2 {
-						return gnet.Close
+						// Send 400 Bad Request instead of closing
+						response := "HTTP/1.1 400 Bad Request\r\n" +
+							"Content-Type: text/plain\r\n" +
+							"Content-Length: 12\r\n" +
+							"Connection: close\r\n" +
+							"\r\n" +
+							"Bad Request"
+						_ = c.AsyncWrite([]byte(response), func(_ gnet.Conn, _ error) error {
+							// Close connection after sending response
+							_ = c.Close()
+							return nil
+						})
+						return gnet.None
 					}
 					session.detected = true
 					session.isH2 = true
@@ -402,18 +632,66 @@ func (s *Server) OnTraffic(c gnet.Conn) gnet.Action {
 					time.AfterFunc(5*time.Millisecond, func() { _ = c.Close() })
 					return gnet.None
 				}
-				return gnet.Close
+				// Send 400 Bad Request for invalid connection preface
+				response := "HTTP/1.1 400 Bad Request\r\n" +
+					"Content-Type: text/plain\r\n" +
+					"Content-Length: 12\r\n" +
+					"Connection: close\r\n" +
+					"\r\n" +
+					"Bad Request"
+				_ = c.AsyncWrite([]byte(response), func(_ gnet.Conn, _ error) error {
+					// Close connection after sending response
+					_ = c.Close()
+					return nil
+				})
+				return gnet.None
 			}
 		} else {
 			// Need more data to detect
 			return gnet.None
 		}
 	} else {
-		// Protocol already detected, delegate to appropriate handler
-		if session.isH2 && s.h2Server != nil {
-			return s.h2Server.OnTraffic(c)
-		} else if !session.isH2 && s.h1Server != nil {
-			return s.h1Server.OnTraffic(c)
+		// Protocol already detected, read data and process directly
+		// Don't delegate to sub-servers' OnTraffic as it causes connection drops
+		buf, err := c.Next(-1)
+		if err != nil {
+			// Connection error - close silently as connection is likely already dead
+			return gnet.Close
+		}
+		if len(buf) == 0 {
+			// No data available yet, wait for more
+			return gnet.None
+		}
+
+		// Process data directly with proper connection handling
+		if session.isH2 && s.h2Server != nil && session.h2Conn != nil {
+			// HTTP/2 handles responses internally via frames
+			if err := session.h2Conn.HandleData(s.ctx, buf); err != nil {
+				s.logger.Printf("Error handling H2 data: %v", err)
+			}
+		} else if !session.isH2 && s.h1Server != nil && session.h1Conn != nil {
+			// HTTP/1.1 - process synchronously to ensure response is queued
+			// The response writer uses AsyncWritev, but processing synchronously
+			// ensures the write is at least queued before we return
+			if err := session.h1Conn.HandleData(buf); err != nil {
+				// Check if this is a normal connection close request
+				if err.Error() == "connection close requested" {
+					// Normal graceful close
+					return gnet.Close
+				}
+				s.logger.Printf("Error handling H1 data: %v", err)
+				// Send error response
+				response := "HTTP/1.1 400 Bad Request\r\n" +
+					"Content-Type: text/plain\r\n" +
+					"Content-Length: 12\r\n" +
+					"Connection: close\r\n" +
+					"\r\n" +
+					"Bad Request"
+				_ = c.AsyncWrite([]byte(response), func(_ gnet.Conn, _ error) error {
+					_ = c.Close()
+					return nil
+				})
+			}
 		}
 	}
 

@@ -620,6 +620,16 @@ func (p *Processor) handleSettings(f *http2.SettingsFrame) error {
 			for sid, stream := range p.manager.streams {
 				stream.mu.Lock()
 				oldWin := stream.WindowSize
+				// Check for overflow (RFC 7540 Section 6.9.2)
+				// "An endpoint MUST treat a change to SETTINGS_INITIAL_WINDOW_SIZE that causes any
+				// flow-control window to exceed the maximum size as a connection error"
+				if delta > 0 && stream.WindowSize > 2147483647-delta {
+					stream.mu.Unlock()
+					p.manager.mu.Unlock()
+					validationErr = fmt.Errorf("stream %d window overflow", sid)
+					_ = p.SendGoAway(p.manager.GetLastStreamID(), http2.ErrCodeFlowControl, []byte(validationErr.Error()))
+					return validationErr
+				}
 				// Allow negative windows per 6.9.2; senders must not send until >=0
 				stream.WindowSize += delta
 				newWin := stream.WindowSize
@@ -679,6 +689,67 @@ func (p *Processor) handleSettings(f *http2.SettingsFrame) error {
 	return nil
 }
 
+// runHandler runs the stream handler in a goroutine
+func (p *Processor) runHandler(stream *Stream) {
+	if p.handler == nil {
+		return
+	}
+	go func() {
+		// Check if stream was cancelled before starting
+		select {
+		case <-stream.ctx.Done():
+			return
+		default:
+		}
+
+		stream.mu.Lock()
+		stream.HandlerStarted = true
+		stream.mu.Unlock()
+
+		if err := p.handler.HandleStream(stream.ctx, stream); err != nil {
+			// Check context again before sending RST
+			select {
+			case <-stream.ctx.Done():
+				return
+			default:
+				_ = p.writer.WriteRSTStream(stream.ID, http2.ErrCodeInternal)
+				if flusher, ok := p.writer.(interface{ Flush() error }); ok {
+					_ = flusher.Flush()
+				}
+			}
+		} else {
+			// Handler finished successfully
+			stream.mu.RLock()
+			headersSent := stream.HeadersSent
+			state := stream.State
+			stream.mu.RUnlock()
+
+			// If headers haven't been sent, send default 200 OK
+			if !headersSent {
+				if stream.ResponseWriter != nil {
+					_ = stream.ResponseWriter.WriteResponse(stream.ID, 200, nil, nil)
+				}
+				return
+			}
+
+			// If headers were sent but stream is still open (e.g. streaming response),
+			// we need to close it by sending an empty DATA frame with END_STREAM flag
+			if state == StateOpen || state == StateHalfClosedRemote {
+				_ = p.writer.WriteData(stream.ID, true, nil)
+				if flusher, ok := p.writer.(interface{ Flush() error }); ok {
+					_ = flusher.Flush()
+				}
+				// Update state
+				if state == StateHalfClosedRemote {
+					stream.SetState(StateClosed)
+				} else {
+					stream.SetState(StateHalfClosedLocal)
+				}
+			}
+		}
+	}()
+}
+
 // handleHeaders processes HEADERS frames
 //
 //nolint:gocyclo // HTTP/2 HEADERS frame handling requires complex state machine per RFC 7540
@@ -719,11 +790,10 @@ func (p *Processor) handleHeaders(_ context.Context, f *http2.HeadersFrame) erro
 		_ = lastClientStream // avoid unused warning
 
 		// If stream ID <= lastClientStream, this is attempting to reuse a closed stream ID
-		// Per RFC 7540 §5.1.1, this should be treated as STREAM_CLOSED, not PROTOCOL_ERROR
+		// Per RFC 7540 §5.1.1, unexpected stream identifier MUST be PROTOCOL_ERROR
 		if f.StreamID <= lastClientStream {
-			// Treat reuse of a closed stream ID as connection error per h2spec 5.1.12
-			// Reused closed stream ID
-			_ = p.SendGoAway(lastClientStream, http2.ErrCodeStreamClosed, []byte("HEADERS on closed stream (reused id)"))
+			// Treat reuse of a closed stream ID as connection error
+			_ = p.SendGoAway(lastClientStream, http2.ErrCodeProtocol, []byte("HEADERS on closed stream (reused id)"))
 			return fmt.Errorf("HEADERS frame on closed stream %d (last stream: %d)", f.StreamID, lastClientStream)
 		}
 
@@ -829,24 +899,7 @@ func (p *Processor) handleHeaders(_ context.Context, f *http2.HeadersFrame) erro
 			if f.StreamEnded() {
 				existingStream.EndStream = true
 				existingStream.SetState(StateHalfClosedRemote)
-				if p.handler != nil {
-					sref := existingStream
-					go func() {
-						select {
-						case <-sref.ctx.Done():
-							return
-						default:
-						}
-						if err := p.handler.HandleStream(sref.ctx, sref); err != nil {
-							select {
-							case <-sref.ctx.Done():
-								return
-							default:
-								_ = p.writer.WriteRSTStream(sref.ID, http2.ErrCodeInternal)
-							}
-						}
-					}()
-				}
+				p.runHandler(existingStream)
 			}
 			return nil
 		}
@@ -920,21 +973,7 @@ func (p *Processor) handleHeaders(_ context.Context, f *http2.HeadersFrame) erro
 			}
 			stream.mu.Unlock()
 			if !started {
-				go func() {
-					select {
-					case <-stream.ctx.Done():
-						return
-					default:
-					}
-					if err := p.handler.HandleStream(stream.ctx, stream); err != nil {
-						select {
-						case <-stream.ctx.Done():
-							return
-						default:
-							_ = p.writer.WriteRSTStream(stream.ID, http2.ErrCodeInternal)
-						}
-					}
-				}()
+				p.runHandler(stream)
 			}
 		}
 		return nil
@@ -982,29 +1021,7 @@ func (p *Processor) handleHeaders(_ context.Context, f *http2.HeadersFrame) erro
 		}
 
 		// Stream is complete; run handler asynchronously so RST_STREAM can preempt writes
-		if p.handler != nil {
-			go func() {
-				// Check if stream was cancelled before starting
-				select {
-				case <-stream.ctx.Done():
-					return
-				default:
-				}
-
-				stream.mu.Lock()
-				stream.HandlerStarted = true
-				stream.mu.Unlock()
-				if err := p.handler.HandleStream(stream.ctx, stream); err != nil {
-					// Check context again before sending RST
-					select {
-					case <-stream.ctx.Done():
-						return
-					default:
-						_ = p.writer.WriteRSTStream(stream.ID, http2.ErrCodeInternal)
-					}
-				}
-			}()
-		}
+		p.runHandler(stream)
 	}
 
 	return nil
@@ -1070,26 +1087,7 @@ func (p *Processor) handleData(_ context.Context, f *http2.DataFrame) error {
 		}
 
 		// Stream is complete, handle it
-		if p.handler != nil {
-			go func() {
-				// Check if stream was cancelled before starting
-				select {
-				case <-stream.ctx.Done():
-					return
-				default:
-				}
-
-				if err := p.handler.HandleStream(stream.ctx, stream); err != nil {
-					// Check context again before sending RST
-					select {
-					case <-stream.ctx.Done():
-						return
-					default:
-						_ = p.writer.WriteRSTStream(stream.ID, http2.ErrCodeInternal)
-					}
-				}
-			}()
-		}
+		p.runHandler(stream)
 	}
 
 	return nil
@@ -1721,26 +1719,7 @@ func (p *Processor) handleContinuation(_ context.Context, f *http2.ContinuationF
 			stream.SetState(StateHalfClosedRemote)
 
 			// Stream is complete, handle it
-			if p.handler != nil {
-				go func() {
-					// Check if stream was cancelled before starting
-					select {
-					case <-stream.ctx.Done():
-						return
-					default:
-					}
-
-					if err := p.handler.HandleStream(stream.ctx, stream); err != nil {
-						// Check context again before sending RST
-						select {
-						case <-stream.ctx.Done():
-							return
-						default:
-							_ = p.writer.WriteRSTStream(stream.ID, http2.ErrCodeInternal)
-						}
-					}
-				}()
-			}
+			p.runHandler(stream)
 		}
 
 		// Clear continuation state and return buffers to pools

@@ -145,7 +145,13 @@ func main() {
 	log.Println("Use curl with -H 'Accept-Encoding: gzip, br' to see compression")
 	log.Println("Check response headers for Content-Encoding and Vary")
 
-	if err := server.ListenAndServe(router); err != nil {
-		log.Fatal(err)
-	}
+	// Start server in a goroutine
+	go func() {
+		if err := server.ListenAndServe(router); err != nil {
+			log.Fatal(err)
+		}
+	}()
+
+	// Wait indefinitely to keep the server running
+	select {}
 }

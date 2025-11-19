@@ -6,14 +6,14 @@ all: lint test build
 # Build the example server
 build:
 	@echo "Building example server..."
-	@go build -o bin/example ./cmd/example
+	@go build -tags "poll_opt gc_opt" -o bin/example ./cmd/example
 
 # Run tests
 test: test-race test-unit test-integration test-bench
 	@echo "All test targets completed successfully!"
 
 # Run extended tests
-test-extended: test test-rampup test-fuzz
+test-extended: test test-rampup test-fuzz test-load
 	@echo "All extended test targets completed successfully!"
 
 # Run tests with race detector
@@ -89,6 +89,8 @@ lint:
 	@cd test/fuzzy && golangci-lint run
 	@echo "Running golangci-lint on test/integration..."
 	@cd test/integration && golangci-lint run
+	@echo "Running golangci-lint on test/load..."
+	@cd test/load && golangci-lint run
 	@echo "Running golangci-lint on examples..."
 	@for dir in examples/*/; do \
 		if [ -f "$$dir/main.go" ]; then \
@@ -119,19 +121,55 @@ snyk:
 	@echo "Running Snyk security scan..."
 	@snyk test --severity-threshold=high
 
+# Run incremental load tests for reliability
+test-load:
+	@echo "Running incremental load tests (rampup-style)..."
+	@cd test/load && go mod tidy > /dev/null 2>&1
+	@echo ""
+	@echo "=== HTTP/1.1 Incremental Load Test (1 client every 100ms for 25s) ==="
+	@cd test/load && go build -tags "poll_opt gc_opt" -o load-test . && ./load-test -protocol http1 -addr localhost:8081 -duration 25s -clients 1 -rampup 100ms -delay 2ms -max-conn 50000 2>/dev/null && rm -f load-test
+	@echo ""
+	@echo "=== HTTP/2.0 Incremental Load Test (1 client every 100ms for 25s) ==="
+	@cd test/load && go build -tags "poll_opt gc_opt" -o load-test . && ./load-test -protocol http2 -addr localhost:8082 -duration 25s -clients 1 -rampup 100ms -delay 2ms -max-conn 50000 2>/dev/null && rm -f load-test
+	@echo ""
+	@echo "=== Mixed Protocol Incremental Load Test (1 client every 100ms for 25s) ==="
+	@cd test/load && go build -tags "poll_opt gc_opt" -o load-test . && ./load-test -protocol mixed -addr localhost:8083 -duration 25s -clients 1 -rampup 100ms -delay 2ms -max-conn 50000 2>/dev/null && rm -f load-test
+	@echo ""
+	@echo "Load tests completed"
+
 # Run HTTP/2 compliance test
 h2spec: clean
 	@echo "Starting h2spec compliance test..."
 	@go run -tags "poll_opt gc_opt" ./cmd/test-server > .server.log 2>&1 & echo $$! > .server.pid
 	@sleep 5
 	@echo "Running h2spec..."
-	@h2spec --strict -S -h 127.0.0.1 -p 18080 || true
+	@h2spec --strict -S -h 127.0.0.1 -p 18081 || true
 	@-if [ -f .server.pid ]; then kill `cat .server.pid` 2>/dev/null || true; rm -f .server.pid; fi
 
 # Clean build artifacts
 clean:
 	@echo "Cleaning..."
+	@echo "Killing running servers..."
+	@-pkill -f "test-server" 2>/dev/null || true
+	@-pkill -f "^main$$" 2>/dev/null || true
+	@-pkill -f "^example$$" 2>/dev/null || true
+	@-pkill -f "bench-rampup-h1" 2>/dev/null || true
+	@-pkill -f "bench-rampup-h2" 2>/dev/null || true
+	@-pkill -f "load-test" 2>/dev/null || true
+	@-pkill -f "celeris-test" 2>/dev/null || true
+	@-pkill -f "cmd/test-server" 2>/dev/null || true
+	@-pkill -f "cmd/example" 2>/dev/null || true
+	@echo "Removing log files..."
+	@find . -type f -name "*.log" -not -path "./.git/*" -not -path "./docs/themes/*" -delete 2>/dev/null || true
+	@echo "Removing binaries..."
 	@rm -rf bin/
+	@rm -f main test-server celeris-test
+	@rm -f cmd/test-server/test-server
+	@rm -f cmd/example/example
+	@rm -f test/benchmark/http1/bench-rampup-h1
+	@rm -f test/benchmark/http2/bench-rampup-h2
+	@rm -f test/load/load-test
+	@find . -type f -executable -not -path "./.git/*" -not -path "./docs/themes/*" -not -path "./node_modules/*" -not -name "*.go" -not -name "*.md" -not -name "*.sh" -not -name "Makefile" -not -name "*.toml" -not -name "*.yaml" -not -name "*.json" -not -name "*.yml" -not -name "*.scss" -not -name "*.css" -not -name "*.js" -not -name "*.html" -not -name "*.ttf" -not -name "*.woff" -not -name "*.woff2" -not -name "*.png" -not -name "*.svg" -not -name "*.cast" -not -name "*.csv" -not -name "*.out" -not -name "*.pid" -not -name "go" -not -name "git" -not -name "hugo" -not -name "golangci-lint" -not -name "h2spec" -not -name "snyk" -not -name "sonar-scanner" -delete 2>/dev/null || true
 	@rm -f coverage.out coverage.html
 	@rm -rf .sonar/
 	@rm -f .server.pid
@@ -154,6 +192,7 @@ help:
 	@echo "  make test-rampup-h1-celeris - Run HTTP/1.1 ramp-up benchmarks (Celeris only, fast)"
 	@echo "  make test-rampup-h2         - Run HTTP/2 ramp-up benchmarks (all frameworks)"
 	@echo "  make test-rampup-h2-celeris - Run HTTP/2 ramp-up benchmarks (Celeris only, fast)"
+	@echo "  make test-load         - Run comprehensive load tests with increasing load"
 	@echo "  make test-fuzz         - Run fuzz tests"
 	@echo "  make test-coverage     - Generate test coverage report"
 	@echo "  make test-race         - Run tests with race detector"
