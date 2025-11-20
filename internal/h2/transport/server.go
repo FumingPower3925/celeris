@@ -1188,7 +1188,8 @@ func (c *Connection) IsShuttingDown() bool {
 // WriteResponse writes an HTTP/2 response
 //
 //nolint:gocyclo // Flow control and frame ordering requires complex window management per RFC 7540
-func (c *Connection) WriteResponse(streamID uint32, status int, headers [][2]string, body []byte) error {
+func (c *Connection) WriteResponse(st *stream.Stream, status int, headers [][2]string, body []byte) error {
+	streamID := st.ID
 	// Check if we've sent GOAWAY - don't send any more responses
 	if c.sentGoAway.Load() {
 		c.logger.Printf("WriteResponse sid=%d aborted - connection closing", streamID)
@@ -1202,24 +1203,22 @@ func (c *Connection) WriteResponse(streamID uint32, status int, headers [][2]str
 	}
 
 	// Check if stream is still valid (not closed/reset)
-	if st, ok := c.processor.GetManager().GetStream(streamID); ok {
-		state := st.GetState()
-		// StateClosed = 4 (0-indexed: Idle=0, Open=1, HalfClosedLocal=2, HalfClosedRemote=3, Closed=4)
-		if state == 4 { // Stream is closed
-			// avoid logging in hot path
-			return fmt.Errorf("stream %d is closed", streamID)
-		}
-		if st.ClosedByReset {
-			return fmt.Errorf("stream %d was reset by peer", streamID)
-		}
-		// If HeadersSent is false but phase != Init, stream was refused/reset before response
-		if !st.HeadersSent && st.GetPhase() != stream.PhaseInit {
-			return fmt.Errorf("stream %d was refused/reset", streamID)
-		}
+	state := st.GetState()
+	// StateClosed = 4 (0-indexed: Idle=0, Open=1, HalfClosedLocal=2, HalfClosedRemote=3, Closed=4)
+	if state == 4 { // Stream is closed
+		// avoid logging in hot path
+		return fmt.Errorf("stream %d is closed", streamID)
+	}
+	if st.ClosedByReset {
+		return fmt.Errorf("stream %d was reset by peer", streamID)
+	}
+	// If HeadersSent is false but phase != Init, stream was refused/reset before response
+	if !st.HeadersSent && st.GetPhase() != stream.PhaseInit {
+		return fmt.Errorf("stream %d was refused/reset", streamID)
 	}
 
 	// If headers were already sent for this stream, write DATA only for streaming Flush calls
-	if st, ok := c.processor.GetManager().GetStream(streamID); ok && st.HeadersSent {
+	if st.HeadersSent {
 		if st.ClosedByReset {
 			return fmt.Errorf("stream %d was reset by peer", streamID)
 		}
@@ -1241,25 +1240,26 @@ func (c *Connection) WriteResponse(streamID uint32, status int, headers [][2]str
 			defer c.writeMu.Unlock()
 
 			// Respect windows
-			connWin, streamWin, maxFrame := c.processor.GetManager().GetSendWindowsAndMaxFrame(streamID)
+			connWin, streamWin, maxFrame := c.processor.GetManager().GetSendWindowsAndMaxFrameFast(st)
 			if maxFrame == 0 {
 				maxFrame = 16384
 			}
 			remaining := body
 			// Always enter loop to handle buffering even when windows are non-positive
 			for len(remaining) > 0 {
-					// Check windows and buffer if necessary
-					if connWin <= 0 || streamWin <= 0 || maxFrame == 0 {
-						// Cannot send now; buffer remaining data
-						if s, ok := c.processor.GetManager().GetStream(streamID); ok && s.OutboundBuffer != nil {
-							_, _ = s.OutboundBuffer.Write(remaining)
-							// Only mark as outbound end if not streaming
-							if !s.IsStreaming {
-								s.OutboundEndStream = true
-							}
+				// Check windows and buffer if necessary
+				if connWin <= 0 || streamWin <= 0 || maxFrame == 0 {
+					// Cannot send now; buffer remaining data
+					if st.OutboundBuffer != nil {
+						_, _ = st.OutboundBuffer.Write(remaining)
+						st.MarkBuffered()
+						// Only mark as outbound end if not streaming
+						if !st.IsStreaming {
+							st.OutboundEndStream = true
 						}
-						break
 					}
+					break
+				}
 
 				allow := int(connWin)
 				if int(streamWin) < allow {
@@ -1280,9 +1280,9 @@ func (c *Connection) WriteResponse(streamID uint32, status int, headers [][2]str
 					return err
 				}
 				//nolint:gosec // G115: safe conversion; chunk size is bounded by flow-control windows and MAX_FRAME_SIZE
-				c.processor.GetManager().ConsumeSendWindow(streamID, int32(len(chunk)))
+				c.processor.GetManager().ConsumeSendWindowFast(st, int32(len(chunk)))
 				// refresh windows for next loop
-				connWin, streamWin, maxFrame = c.processor.GetManager().GetSendWindowsAndMaxFrame(streamID)
+				connWin, streamWin, maxFrame = c.processor.GetManager().GetSendWindowsAndMaxFrameFast(st)
 				if maxFrame == 0 {
 					maxFrame = 16384
 				}
@@ -1334,13 +1334,13 @@ func (c *Connection) WriteResponse(streamID uint32, status int, headers [][2]str
 	// Write HEADERS (and CONTINUATION) respecting peer MAX_FRAME_SIZE
 	// If no body is present, we can end the stream with HEADERS (END_STREAM) to avoid zero-length DATA later
 	endStream := len(body) == 0
-	if st, ok := c.processor.GetManager().GetStream(streamID); ok && st.IsStreaming {
+	if st.IsStreaming {
 		endStream = false
 	}
 	if verboseLogging {
 		c.logger.Printf("[H2] WriteResponse HEADERS: sid=%d end=%v bodyLen=%d", streamID, endStream, len(body))
 	}
-	_, _, maxFrame := c.processor.GetManager().GetSendWindowsAndMaxFrame(streamID)
+	_, _, maxFrame := c.processor.GetManager().GetSendWindowsAndMaxFrameFast(st)
 	if maxFrame == 0 {
 		maxFrame = 16384
 	}
@@ -1352,22 +1352,20 @@ func (c *Connection) WriteResponse(streamID uint32, status int, headers [][2]str
 	}
 
 	// Mark headers as sent BEFORE flushing
-	if st, ok := c.processor.GetManager().GetStream(streamID); ok {
-		if st.ClosedByReset {
-			c.writeMu.Unlock()
-			return fmt.Errorf("stream %d was reset by peer", streamID)
-		}
-		st.HeadersSent = true
-		st.SetPhase(stream.PhaseHeadersSent)
-		// Don't set IsStreaming for normal responses - reserve it for actual streaming
+	if st.ClosedByReset {
+		c.writeMu.Unlock()
+		return fmt.Errorf("stream %d was reset by peer", streamID)
 	}
+	st.HeadersSent = true
+	st.SetPhase(stream.PhaseHeadersSent)
+	// Don't set IsStreaming for normal responses - reserve it for actual streaming
 
 	// If there is a body, choose adaptive path: small direct streaming, large buffered micro-batching
 	if len(body) > 0 {
 		const directThreshold = 32 * 1024 // 32 KiB
 		if len(body) <= directThreshold {
 			// Direct streaming under lock for tiny bodies
-			connWin, streamWin, maxFrame := c.processor.GetManager().GetSendWindowsAndMaxFrame(streamID)
+			connWin, streamWin, maxFrame := c.processor.GetManager().GetSendWindowsAndMaxFrameFast(st)
 			if maxFrame == 0 {
 				maxFrame = 16384
 			}
@@ -1376,7 +1374,7 @@ func (c *Connection) WriteResponse(streamID uint32, status int, headers [][2]str
 			if len(body) <= int(maxFrame) && len(body) <= int(connWin) && len(body) <= int(streamWin) {
 				// Single frame send - most common case for JSON responses
 				end := true
-				if st, ok := c.processor.GetManager().GetStream(streamID); ok && st.IsStreaming {
+				if st.IsStreaming {
 					end = false
 				}
 				if err := c.writer.WriteData(streamID, end, body); err != nil {
@@ -1384,11 +1382,9 @@ func (c *Connection) WriteResponse(streamID uint32, status int, headers [][2]str
 					return err
 				}
 				//nolint:gosec // G115: safe conversion; body length is bounded by flow control windows
-				c.processor.GetManager().ConsumeSendWindow(streamID, int32(len(body)))
+				c.processor.GetManager().ConsumeSendWindowFast(st, int32(len(body)))
 				if end {
-					if st, ok := c.processor.GetManager().GetStream(streamID); ok {
-						st.SetState(stream.StateClosed)
-					}
+					st.SetState(stream.StateClosed)
 				}
 			} else {
 				// Multi-frame path for larger bodies
@@ -1398,9 +1394,9 @@ func (c *Connection) WriteResponse(streamID uint32, status int, headers [][2]str
 					// Check windows and buffer if necessary
 					if connWin <= 0 || streamWin <= 0 || maxFrame == 0 {
 						// Cannot send now; buffer remaining data
-						if s, ok := c.processor.GetManager().GetStream(streamID); ok && s.OutboundBuffer != nil {
-							_, _ = s.OutboundBuffer.Write(remaining)
-							s.OutboundEndStream = endStream
+						if st.OutboundBuffer != nil {
+							_, _ = st.OutboundBuffer.Write(remaining)
+							st.OutboundEndStream = endStream
 						}
 						break
 					}
@@ -1415,46 +1411,45 @@ func (c *Connection) WriteResponse(streamID uint32, status int, headers [][2]str
 					if allow <= 0 {
 						break
 					}
-				if allow > len(remaining) {
-					allow = len(remaining)
-				}
-				chunk := remaining[:allow]
-				remaining = remaining[allow:]
-				// If we have remaining data, this is NOT the end of stream for this chunk
-				// If we have NO remaining data, this IS the end of stream
-				end := len(remaining) == 0
-				// If streaming, do not end stream on intermediate chunks
-				if st, ok := c.processor.GetManager().GetStream(streamID); ok && st.IsStreaming {
-					end = false
-				}
-				if err := c.writer.WriteData(streamID, end, chunk); err != nil {
-					c.writeMu.Unlock()
-					return err
-				}
+					if allow > len(remaining) {
+						allow = len(remaining)
+					}
+					chunk := remaining[:allow]
+					remaining = remaining[allow:]
+					// If we have remaining data, this is NOT the end of stream for this chunk
+					// If we have NO remaining data, this IS the end of stream
+					end := len(remaining) == 0
+					// If streaming, do not end stream on intermediate chunks
+					if st.IsStreaming {
+						end = false
+					}
+					if err := c.writer.WriteData(streamID, end, chunk); err != nil {
+						c.writeMu.Unlock()
+						return err
+					}
 					//nolint:gosec // bounded by windows
-					c.processor.GetManager().ConsumeSendWindow(streamID, int32(len(chunk)))
-					connWin, streamWin, maxFrame = c.processor.GetManager().GetSendWindowsAndMaxFrame(streamID)
+					c.processor.GetManager().ConsumeSendWindowFast(st, int32(len(chunk)))
+					connWin, streamWin, maxFrame = c.processor.GetManager().GetSendWindowsAndMaxFrameFast(st)
 					if maxFrame == 0 {
 						maxFrame = 16384
 					}
 					if end {
-						if st, ok := c.processor.GetManager().GetStream(streamID); ok {
-							if st.EndStream {
-								st.SetState(stream.StateClosed)
-							} else {
-								st.SetState(stream.StateHalfClosedLocal)
-							}
+						if st.EndStream {
+							st.SetState(stream.StateClosed)
+						} else {
+							st.SetState(stream.StateHalfClosedLocal)
 						}
 					}
 				}
 			}
 		} else {
 			// Buffered micro-batching for larger bodies
-			if s, ok := c.processor.GetManager().GetStream(streamID); ok && s.OutboundBuffer != nil {
-				_, _ = s.OutboundBuffer.Write(body)
-				s.OutboundEndStream = true
+			if st.OutboundBuffer != nil {
+				_, _ = st.OutboundBuffer.Write(body)
+				st.MarkBuffered()
+				st.OutboundEndStream = true
 			}
-			c.processor.FlushBufferedDataLocked(streamID)
+			c.processor.FlushBufferedDataLocked(streamID) // TODO: Optimize to use Stream object
 		}
 		// Flush HEADERS + DATA together
 		if err := c.writer.Flush(); err != nil {
@@ -1475,12 +1470,10 @@ func (c *Connection) WriteResponse(streamID uint32, status int, headers [][2]str
 
 	// Update stream state after sending HEADERS with END_STREAM (no body)
 	if endStream {
-		if st, ok := c.processor.GetManager().GetStream(streamID); ok {
-			if st.EndStream {
-				st.SetState(stream.StateClosed)
-			} else {
-				st.SetState(stream.StateHalfClosedLocal)
-			}
+		if st.EndStream {
+			st.SetState(stream.StateClosed)
+		} else {
+			st.SetState(stream.StateHalfClosedLocal)
 		}
 	}
 	c.writeMu.Unlock()

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"sync"
+	"sync/atomic"
 
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/hpack"
@@ -199,6 +200,11 @@ type Manager struct {
 	maxFrameSize      uint32 // Current MAX_FRAME_SIZE setting
 	initialWindowSize uint32 // Current INITIAL_WINDOW_SIZE setting
 	activeStreams     uint32 // Count of active streams (Open or Half-Closed)
+	// WINDOW_UPDATE batching to reduce frame overhead
+	pendingConnWindowUpdate uint32              // Accumulated connection-level window credits
+	pendingStreamUpdates    map[uint32]*uint32  // Per-stream accumulated credits
+	windowUpdateMu          sync.Mutex          // Protects pending window updates
+	streamsWithData         map[uint32]struct{} // Set of streams that have buffered data
 }
 
 // NewManager creates a new stream manager
@@ -214,6 +220,10 @@ func NewManager() *Manager {
 		maxFrameSize:      16384, // Default per RFC 7540
 		initialWindowSize: 65535, // Default per RFC 7540
 		activeStreams:     0,
+		// Initialize window update batching
+		pendingConnWindowUpdate: 0,
+		pendingStreamUpdates:    make(map[uint32]*uint32),
+		streamsWithData:         make(map[uint32]struct{}),
 	}
 }
 
@@ -245,12 +255,40 @@ func (m *Manager) CreateStream(id uint32) *Stream {
 	return stream
 }
 
-// GetStream returns a stream by ID
+// GetStream gets a stream by ID
 func (m *Manager) GetStream(id uint32) (*Stream, bool) {
 	m.mu.RLock()
-	defer m.mu.RUnlock()
-	stream, ok := m.streams[id]
-	return stream, ok
+	s, ok := m.streams[id]
+	m.mu.RUnlock()
+	return s, ok
+}
+
+// MarkStreamBuffered adds a stream to the set of streams with buffered data
+func (m *Manager) MarkStreamBuffered(id uint32) {
+	m.mu.Lock()
+	m.streamsWithData[id] = struct{}{}
+	m.mu.Unlock()
+}
+
+// MarkStreamEmpty removes a stream from the set of streams with buffered data
+func (m *Manager) MarkStreamEmpty(id uint32) {
+	m.mu.Lock()
+	delete(m.streamsWithData, id)
+	m.mu.Unlock()
+}
+
+// MarkBuffered marks the stream as having buffered data
+func (s *Stream) MarkBuffered() {
+	if s.manager != nil {
+		s.manager.MarkStreamBuffered(s.ID)
+	}
+}
+
+// MarkEmpty marks the stream as having no buffered data
+func (s *Stream) MarkEmpty() {
+	if s.manager != nil {
+		s.manager.MarkStreamEmpty(s.ID)
+	}
 }
 
 // GetOrCreateStream gets an existing stream or creates a new one
@@ -366,16 +404,23 @@ func (m *Manager) markActiveTransition(prev State, next State) {
 
 // GetSendWindowsAndMaxFrame returns current connection window, stream window, and max frame size.
 func (m *Manager) GetSendWindowsAndMaxFrame(streamID uint32) (connWindow int32, streamWindow int32, maxFrame uint32) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	connWindow = m.connectionWindow
-	if s, ok := m.streams[streamID]; ok {
-		streamWindow = s.WindowSize
+	connWindow = atomic.LoadInt32(&m.connectionWindow)
+	if s, ok := m.GetStream(streamID); ok {
+		streamWindow = s.GetWindowSize()
 	} else {
-		//nolint:gosec // G115: safe conversion, initialWindowSize validated by protocol
+		//nolint:gosec // G115: safe conversion
 		streamWindow = int32(m.initialWindowSize)
 	}
-	maxFrame = m.maxFrameSize
+	maxFrame = atomic.LoadUint32(&m.maxFrameSize)
+	return
+}
+
+// GetSendWindowsAndMaxFrameFast returns current connection window, stream window, and max frame size.
+// It avoids Manager lock by using atomics and direct stream access.
+func (m *Manager) GetSendWindowsAndMaxFrameFast(s *Stream) (connWindow int32, streamWindow int32, maxFrame uint32) {
+	connWindow = atomic.LoadInt32(&m.connectionWindow)
+	streamWindow = s.GetWindowSize()
+	maxFrame = atomic.LoadUint32(&m.maxFrameSize)
 	return
 }
 
@@ -384,12 +429,90 @@ func (m *Manager) ConsumeSendWindow(streamID uint32, n int32) {
 	if n <= 0 {
 		return
 	}
-	m.mu.Lock()
-	m.connectionWindow -= n
-	if s, ok := m.streams[streamID]; ok {
+	atomic.AddInt32(&m.connectionWindow, -n)
+	if s, ok := m.GetStream(streamID); ok {
+		s.mu.Lock()
 		s.WindowSize -= n
+		s.mu.Unlock()
 	}
-	m.mu.Unlock()
+}
+
+// ConsumeSendWindowFast decrements connection and stream windows after sending DATA.
+// Avoids Manager lock.
+func (m *Manager) ConsumeSendWindowFast(s *Stream, n int32) {
+	if n <= 0 {
+		return
+	}
+	atomic.AddInt32(&m.connectionWindow, -n)
+	s.mu.Lock()
+	s.WindowSize -= n
+	s.mu.Unlock()
+}
+
+// Window update batching threshold - send WINDOW_UPDATE when we've accumulated this many bytes
+const windowUpdateThreshold = 16384 // 16KB - good balance between overhead and responsiveness
+
+// AccumulateWindowUpdate accumulates window credits without sending immediately
+// This batches WINDOW_UPDATE frames to reduce per-frame overhead
+func (m *Manager) AccumulateWindowUpdate(streamID uint32, increment uint32) {
+	m.windowUpdateMu.Lock()
+	defer m.windowUpdateMu.Unlock()
+
+	if streamID == 0 {
+		m.pendingConnWindowUpdate += increment
+	} else {
+		if m.pendingStreamUpdates[streamID] == nil {
+			val := uint32(0)
+			m.pendingStreamUpdates[streamID] = &val
+		}
+		*m.pendingStreamUpdates[streamID] += increment
+	}
+}
+
+// FlushWindowUpdates sends accumulated WINDOW_UPDATE frames if threshold is met
+// Returns true if updates were sent
+func (m *Manager) FlushWindowUpdates(writer FrameWriter, force bool) bool {
+	m.windowUpdateMu.Lock()
+
+	// Check connection-level updates
+	connUpdate := m.pendingConnWindowUpdate
+	needsConnFlush := force || connUpdate >= windowUpdateThreshold
+
+	// Collect stream updates that need flushing
+	streamUpdates := make(map[uint32]uint32)
+	for sid, pending := range m.pendingStreamUpdates {
+		if pending != nil && *pending > 0 {
+			if force || *pending >= windowUpdateThreshold {
+				streamUpdates[sid] = *pending
+			}
+		}
+	}
+
+	// Reset accumulators for flushed updates
+	if needsConnFlush {
+		m.pendingConnWindowUpdate = 0
+	}
+	for sid := range streamUpdates {
+		if m.pendingStreamUpdates[sid] != nil {
+			*m.pendingStreamUpdates[sid] = 0
+		}
+	}
+
+	m.windowUpdateMu.Unlock()
+
+	// Send WINDOW_UPDATE frames without holding lock
+	flushed := false
+	if needsConnFlush && connUpdate > 0 {
+		_ = writer.WriteWindowUpdate(0, connUpdate)
+		flushed = true
+	}
+
+	for sid, increment := range streamUpdates {
+		_ = writer.WriteWindowUpdate(sid, increment)
+		flushed = true
+	}
+
+	return flushed
 }
 
 // Handler interface for processing streams
@@ -458,7 +581,7 @@ func NewProcessor(handler Handler, writer FrameWriter, conn ResponseWriter) *Pro
 
 // ResponseWriter is an interface for writing responses
 type ResponseWriter interface {
-	WriteResponse(streamID uint32, status int, headers [][2]string, body []byte) error
+	WriteResponse(stream *Stream, status int, headers [][2]string, body []byte) error
 	SendGoAway(lastStreamID uint32, code http2.ErrCode, debug []byte) error
 	MarkStreamClosed(streamID uint32)
 	IsStreamClosed(streamID uint32) bool
@@ -656,7 +779,7 @@ func (p *Processor) handleSettings(f *http2.SettingsFrame) error {
 			}
 			// Update max frame size
 			p.manager.mu.Lock()
-			p.manager.maxFrameSize = s.Val
+			atomic.StoreUint32(&p.manager.maxFrameSize, s.Val)
 			p.manager.mu.Unlock()
 		case http2.SettingMaxHeaderListSize:
 			// No specific validation
@@ -727,7 +850,7 @@ func (p *Processor) runHandler(stream *Stream) {
 			// If headers haven't been sent, send default 200 OK
 			if !headersSent {
 				if stream.ResponseWriter != nil {
-					_ = stream.ResponseWriter.WriteResponse(stream.ID, 200, nil, nil)
+					_ = stream.ResponseWriter.WriteResponse(stream, 200, nil, nil)
 				}
 				return
 			}
@@ -1079,17 +1202,18 @@ func (p *Processor) handleData(_ context.Context, f *http2.DataFrame) error {
 		return err
 	}
 
-	// Send window update (dataLen bounded by MAX_FRAME_SIZE <= 2^24-1)
+	// Batch WINDOW_UPDATE frames to reduce overhead (dataLen bounded by MAX_FRAME_SIZE <= 2^24-1)
 	//nolint:gosec // G115: safe conversion, dataLen is frame payload size
 	updateLen := uint32(dataLen)
-	if err := p.writer.WriteWindowUpdate(f.StreamID, updateLen); err != nil {
-		return err
-	}
-	if err := p.writer.WriteWindowUpdate(0, updateLen); err != nil {
-		return err
-	}
 
+	// Accumulate window credits instead of sending immediately
+	p.manager.AccumulateWindowUpdate(f.StreamID, updateLen)
+	p.manager.AccumulateWindowUpdate(0, updateLen) // Connection-level
+
+	// Flush if stream is ending (force flush to ensure client knows window is available)
+	// or check if batching threshold is met
 	if f.StreamEnded() {
+		p.manager.FlushWindowUpdates(p.writer, true) // Force flush on stream end
 		stream.EndStream = true
 		stream.SetState(StateHalfClosedRemote)
 
@@ -1101,6 +1225,9 @@ func (p *Processor) handleData(_ context.Context, f *http2.DataFrame) error {
 
 		// Stream is complete, handle it
 		p.runHandler(stream)
+	} else {
+		// Try to flush if threshold is met (non-blocking check)
+		p.manager.FlushWindowUpdates(p.writer, false)
 	}
 
 	return nil
@@ -1129,28 +1256,37 @@ func (p *Processor) handleWindowUpdate(f *http2.WindowUpdateFrame) error {
 
 	if f.StreamID == 0 {
 		// Connection-level window update
-		p.manager.mu.Lock()
-		newWindow := int64(p.manager.connectionWindow) + int64(f.Increment)
-		if newWindow > 0x7fffffff {
-			// Flow control window overflow
-			p.manager.mu.Unlock()
-			_ = p.SendGoAway(0, http2.ErrCodeFlowControl, []byte("connection window overflow"))
-			if flusher, ok := p.writer.(interface{ Flush() error }); ok {
-				_ = flusher.Flush()
+		for {
+			oldWin := atomic.LoadInt32(&p.manager.connectionWindow)
+			newWin := int64(oldWin) + int64(f.Increment)
+			if newWin > 0x7fffffff {
+				// Flow control window overflow
+				_ = p.SendGoAway(0, http2.ErrCodeFlowControl, []byte("connection window overflow"))
+				if flusher, ok := p.writer.(interface{ Flush() error }); ok {
+					_ = flusher.Flush()
+				}
+				return fmt.Errorf("connection window overflow: %d + %d > 2^31-1", oldWin, f.Increment)
 			}
-			return fmt.Errorf("connection window overflow: %d + %d > 2^31-1", p.manager.connectionWindow, f.Increment)
+			// Safe conversion: newWin validated to be <= 0x7fffffff
+			//nolint:gosec // G115: safe conversion, newWin validated above
+			if atomic.CompareAndSwapInt32(&p.manager.connectionWindow, oldWin, int32(newWin)) {
+				break
+			}
 		}
-		//nolint:gosec // G115: safe conversion, newWindow validated <= 2^31-1 above
-		p.manager.connectionWindow = int32(newWindow)
-		// Snapshot stream IDs while holding lock
-		streamIDs := make([]uint32, 0, len(p.manager.streams))
-		for id := range p.manager.streams {
-			streamIDs = append(streamIDs, id)
+
+		// Snapshot streams to flush - only those with buffered data (optimization)
+		p.manager.mu.RLock()
+		streams := make([]*Stream, 0, len(p.manager.streamsWithData))
+		for id := range p.manager.streamsWithData {
+			if s, ok := p.manager.streams[id]; ok {
+				streams = append(streams, s)
+			}
 		}
-		p.manager.mu.Unlock()
-		// Attempt to flush buffered data for all streams now that connection window increased
-		for _, sid := range streamIDs {
-			p.flushBufferedData(sid)
+		p.manager.mu.RUnlock()
+
+		// Attempt to flush buffered data for streams with data
+		for _, s := range streams {
+			p.flushBufferedDataStream(s)
 		}
 	} else {
 		// Stream-level window update
@@ -1190,6 +1326,9 @@ func (p *Processor) handleWindowUpdate(f *http2.WindowUpdateFrame) error {
 		}
 		//nolint:gosec // G115: safe conversion, newWindow validated <= 2^31-1 above
 		stream.WindowSize = int32(newWindow)
+
+		// Check if there's buffered data before attempting flush (optimization)
+		hasBufferedData := stream.OutboundBuffer != nil && stream.OutboundBuffer.Len() > 0
 		stream.mu.Unlock()
 
 		// Notify waiting writers and attempt to flush any buffered outbound data
@@ -1198,18 +1337,27 @@ func (p *Processor) handleWindowUpdate(f *http2.WindowUpdateFrame) error {
 		case stream.ReceivedWindowUpd <- int32(f.Increment):
 		default:
 		}
-		// Try to send buffered data now that window increased
-		p.flushBufferedData(f.StreamID)
+
+		// Only flush if there's actually buffered data (optimization)
+		if hasBufferedData {
+			p.flushBufferedDataStream(stream)
+		}
 	}
 	return nil
 }
 
 // flushBufferedData attempts to send any buffered outbound data for a stream
+func (p *Processor) flushBufferedData(streamID uint32) {
+	if s, ok := p.manager.GetStream(streamID); ok {
+		p.flushBufferedDataStream(s)
+	}
+}
+
+// flushBufferedDataStream attempts to send any buffered outbound data for a stream object
 //
 //nolint:gocyclo // Flow control and micro-batching requires complex window management per RFC 7540
-func (p *Processor) flushBufferedData(streamID uint32) {
-	s, ok := p.manager.GetStream(streamID)
-	if !ok || s.OutboundBuffer == nil {
+func (p *Processor) flushBufferedDataStream(s *Stream) {
+	if s.OutboundBuffer == nil {
 		// Stream not found or buffer nil
 		return
 	}
@@ -1235,7 +1383,7 @@ func (p *Processor) flushBufferedData(streamID uint32) {
 	if s.OutboundBuffer.Len() == 0 {
 		return
 	}
-	connWin, strWin, maxFrame := p.manager.GetSendWindowsAndMaxFrame(streamID)
+	connWin, strWin, maxFrame := p.manager.GetSendWindowsAndMaxFrameFast(s)
 	// Check flow control windows
 	if maxFrame == 0 {
 		maxFrame = 16384
@@ -1291,11 +1439,11 @@ func (p *Processor) flushBufferedData(streamID uint32) {
 			break
 		}
 		endStream := s.OutboundBuffer.Len() == 0 && s.OutboundEndStream && !isStreaming
-		_ = p.writer.WriteData(streamID, endStream, chunk)
+		_ = p.writer.WriteData(s.ID, endStream, chunk)
 		//nolint:gosec
 		sent := int32(len(chunk))
-		p.manager.ConsumeSendWindow(streamID, sent)
-		connWin, strWin, maxFrame = p.manager.GetSendWindowsAndMaxFrame(streamID)
+		p.manager.ConsumeSendWindowFast(s, sent)
+		connWin, strWin, maxFrame = p.manager.GetSendWindowsAndMaxFrameFast(s)
 		totalSent += int(sent)
 		if endStream {
 			if s.EndStream {
@@ -1307,6 +1455,7 @@ func (p *Processor) flushBufferedData(streamID uint32) {
 		}
 		// If we sent less than a full frame and buffer is empty, stop to flush
 		if s.OutboundBuffer.Len() == 0 {
+			s.MarkEmpty()
 			break
 		}
 	}

@@ -91,7 +91,10 @@ Thumbs.db
 # Project specific
 baseline.json
 
-results.*
-
 test/benchmark/http2/rampup_results.*
 test/benchmark/http1/rampup_results.*
+
+
+*.csv
+*.json
+*results.md

@@ -3,7 +3,6 @@ package celeris
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"mime"
@@ -16,6 +15,7 @@ import (
 	"sync"
 
 	"github.com/albertbausili/celeris/internal/h2/stream"
+	json "github.com/goccy/go-json"
 )
 
 // Context represents an HTTP/2 request-response context.
@@ -41,10 +41,20 @@ type Context struct {
 	authority string
 	// Mutex to protect concurrent writes in middleware like Timeout
 	writeMu sync.Mutex
+	// params stores URL parameters efficiently
+	params []RouteParam
+}
+
+// RouteParam represents a single URL parameter.
+type RouteParam struct {
+	Key   string
+	Value string
 }
 
 var responseBufPool = sync.Pool{New: func() any { return new(bytes.Buffer) }}
 var ctxValuesPool = sync.Pool{New: func() any { return make(map[string]interface{}, 8) }}
+var paramsPool = sync.Pool{New: func() any { return make([]RouteParam, 0, 4) }}
+var contextPool = sync.Pool{New: func() any { return &Context{} }}
 
 // Headers represents HTTP headers with efficient access.
 type Headers struct {
@@ -144,20 +154,101 @@ func (h *Headers) Has(key string) bool {
 	return false
 }
 
-func newContext(ctx context.Context, s *stream.Stream, writeResponse func(uint32, int, [][2]string, []byte) error) *Context {
-	c := &Context{
-		StreamID:        s.ID,
-		headers:         NewHeaders(),
-		body:            stream.NewReader(s),
-		statusCode:      200,
-		responseHeaders: NewHeaders(),
-		responseBody:    responseBufPool.Get().(*bytes.Buffer),
-		stream:          s,
-		ctx:             ctx,
-		writeResponse:   writeResponse,
-		// Lazily allocate values map to avoid cost on simple paths
-		values: nil,
+// Reset clears the headers for reuse.
+func (h *Headers) Reset() {
+	h.headers = h.headers[:0]
+	if h.index != nil {
+		for k := range h.index {
+			delete(h.index, k)
+		}
 	}
+}
+
+// Reset clears the Context for reuse.
+func (c *Context) Reset() {
+	c.headers.Reset()
+	c.responseHeaders.Reset()
+	c.StreamID = 0
+	c.body = nil
+	c.stream = nil
+	c.ctx = nil
+	c.writeResponse = nil
+	c.pushPromise = nil
+	c.hasFlushed = false
+	c.method = ""
+	c.path = ""
+	c.scheme = ""
+	c.authority = ""
+
+	if c.responseBody != nil {
+		c.responseBody.Reset()
+		responseBufPool.Put(c.responseBody)
+		c.responseBody = nil
+	}
+
+	if len(c.streamBuffer) > 0 {
+		c.streamBuffer = c.streamBuffer[:0]
+	}
+
+	if c.values != nil {
+		for k := range c.values {
+			delete(c.values, k)
+		}
+		ctxValuesPool.Put(c.values)
+		c.values = nil
+	}
+
+	if len(c.params) > 0 {
+		c.params = c.params[:0]
+		//nolint:staticcheck // SA6002: params pool stores slices directly, allocation is intentional
+		paramsPool.Put(c.params)
+		c.params = nil
+	}
+}
+
+// Release returns the Context to the pool.
+func (c *Context) Release() {
+	c.Reset()
+	contextPool.Put(c)
+}
+
+func newContext(ctx context.Context, s *stream.Stream, writeResponse func(uint32, int, [][2]string, []byte) error) *Context {
+	c := contextPool.Get().(*Context)
+	// Reset is done in Release() before putting back, but safe to double check or just init
+	// If we trust Release(), we can skip Reset() here, but for safety let's assume it might be dirty if panic happened
+	// Actually, typically Reset is done on Get or Put. Let's do it on Put (Release).
+	// So here we just init.
+	// But if Release wasn't called (e.g. panic), we might get dirty context if we don't Reset on Get.
+	// Safer to Reset on Get.
+	// But Release also calls Reset.
+	// Let's rely on Release calling Reset, but also ensure fields are overwritten.
+	// Actually, c.Reset() clears everything.
+	// If we call c.Reset() here, we are safe.
+	// But wait, I modified Reset to put things BACK to pool.
+	// So if I call Reset() here on a fresh Get(), it's fine because fields are nil.
+	// BUT if I call Reset() on a dirty context that wasn't Released, it will put things back to pool.
+	// So usage pattern: Get -> Init -> Use -> Release(Reset).
+	// If I Reset() here, and it was already Reset() by Release(), it's no-op (checks for nil).
+
+	// But wait, newContext assumes it gets a context.
+	// If I call Reset() here, and c.responseBody is nil, it's fine.
+	// If c.responseBody is NOT nil (dirty), it puts it back.
+
+	// HOWEVER, c.headers is a struct, not pointer.
+	// c.headers.Reset() is fine.
+
+	c.StreamID = s.ID
+	c.stream = s
+	c.ctx = ctx
+	c.writeResponse = writeResponse
+
+	// Init headers (Reset cleared them)
+	// headers are struct, so they exist.
+
+	c.body = stream.NewReader(s)
+	c.statusCode = 200
+	c.responseBody = responseBufPool.Get().(*bytes.Buffer)
+	c.responseBody.Reset()
 
 	// Populate headers directly from stream
 	s.ForEachHeader(func(name, value string) {
@@ -173,7 +264,6 @@ func newContext(ctx context.Context, s *stream.Stream, writeResponse func(uint32
 			c.authority = value
 		}
 		// Store all non-pseudo headers; also store pseudo-headers for completeness
-		// Header struct normalizes to lowercase
 		c.headers.Set(name, value)
 	})
 
@@ -184,24 +274,42 @@ func newContext(ctx context.Context, s *stream.Stream, writeResponse func(uint32
 // It accepts method, path, authority, request headers and an optional body. The write function
 // is used to send responses and maps to the underlying transport write path.
 func NewContextH1(ctx context.Context, method, path, authority string, reqHeaders [][2]string, body []byte, write func(status int, headers [][2]string, body []byte) error) *Context {
-	c := &Context{
-		StreamID:        1,
-		headers:         NewHeaders(),
-		body:            bytes.NewReader(body),
-		statusCode:      200,
-		responseHeaders: NewHeaders(),
-		responseBody:    responseBufPool.Get().(*bytes.Buffer),
-		stream:          nil,
-		ctx:             ctx,
-		writeResponse: func(_ uint32, status int, headers [][2]string, b []byte) error {
-			return write(status, headers, b)
-		},
-		values:    nil,
-		method:    method,
-		path:      path,
-		scheme:    "http",
-		authority: authority,
+	c := contextPool.Get().(*Context)
+	// Assume clean state from Release, but ensure key fields are reset
+	c.headers.Reset()
+	c.responseHeaders.Reset()
+	// Safeguard cleanup if Release wasn't thorough (though it should be)
+	if c.values != nil {
+		for k := range c.values {
+			delete(c.values, k)
+		}
+		ctxValuesPool.Put(c.values)
+		c.values = nil
 	}
+	if len(c.params) > 0 {
+		c.params = c.params[:0]
+		//nolint:staticcheck // SA6002: params pool stores slices directly, allocation is intentional
+		paramsPool.Put(c.params)
+		c.params = nil
+	}
+
+	c.StreamID = 1
+	c.body = bytes.NewReader(body)
+	c.statusCode = 200
+	c.responseBody = responseBufPool.Get().(*bytes.Buffer)
+	c.responseBody.Reset()
+	c.stream = nil
+	c.ctx = ctx
+	c.writeResponse = func(_ uint32, status int, headers [][2]string, b []byte) error {
+		return write(status, headers, b)
+	}
+	c.pushPromise = nil
+	c.hasFlushed = false
+	c.method = method
+	c.path = path
+	c.scheme = "http"
+	c.authority = authority
+
 	// Copy request headers
 	for _, h := range reqHeaders {
 		c.headers.Set(h[0], h[1])
@@ -212,24 +320,40 @@ func NewContextH1(ctx context.Context, method, path, authority string, reqHeader
 // NewContextH1NoHeaders constructs an H1 Context without copying request headers.
 // This is a lighter path for benchmarks and handlers that don't inspect request headers.
 func NewContextH1NoHeaders(ctx context.Context, method, path, authority string, body []byte, write func(status int, headers [][2]string, body []byte) error) *Context {
-	c := &Context{
-		StreamID:        1,
-		headers:         NewHeaders(),
-		body:            bytes.NewReader(body),
-		statusCode:      200,
-		responseHeaders: NewHeaders(),
-		responseBody:    responseBufPool.Get().(*bytes.Buffer),
-		stream:          nil,
-		ctx:             ctx,
-		writeResponse: func(_ uint32, status int, headers [][2]string, b []byte) error {
-			return write(status, headers, b)
-		},
-		values:    nil,
-		method:    method,
-		path:      path,
-		scheme:    "http",
-		authority: authority,
+	c := contextPool.Get().(*Context)
+	c.headers.Reset()
+	c.responseHeaders.Reset()
+	if c.values != nil {
+		for k := range c.values {
+			delete(c.values, k)
+		}
+		ctxValuesPool.Put(c.values)
+		c.values = nil
 	}
+	if len(c.params) > 0 {
+		c.params = c.params[:0]
+		//nolint:staticcheck // SA6002: params pool stores slices directly, allocation is intentional
+		paramsPool.Put(c.params)
+		c.params = nil
+	}
+
+	c.StreamID = 1
+	c.body = bytes.NewReader(body)
+	c.statusCode = 200
+	c.responseBody = responseBufPool.Get().(*bytes.Buffer)
+	c.responseBody.Reset()
+	c.stream = nil
+	c.ctx = ctx
+	c.writeResponse = func(_ uint32, status int, headers [][2]string, b []byte) error {
+		return write(status, headers, b)
+	}
+	c.pushPromise = nil
+	c.hasFlushed = false
+	c.method = method
+	c.path = path
+	c.scheme = "http"
+	c.authority = authority
+
 	return c
 }
 
@@ -697,9 +821,9 @@ func (c *Context) FormValue(key string) (string, error) {
 
 // Param returns the value of the URL parameter (from router).
 func (c *Context) Param(name string) string {
-	if val, ok := c.Get(name); ok {
-		if str, ok := val.(string); ok {
-			return str
+	for _, p := range c.params {
+		if p.Key == name {
+			return p.Value
 		}
 	}
 	return ""

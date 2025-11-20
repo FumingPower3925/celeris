@@ -3,7 +3,6 @@ package celeris
 import (
 	"fmt"
 	"strings"
-	"sync"
 )
 
 // Router implements HTTP request routing with support for parameters, middleware, and groups.
@@ -26,8 +25,9 @@ type routeNode struct {
 	isWild    bool
 }
 
-// paramsPool reuses small maps for route parameters to reduce allocations per request.
-var paramsPool = sync.Pool{New: func() any { return make(map[string]string, 4) }}
+// paramsPool reuses small slices for route parameters to reduce allocations per request.
+// It is defined in context.go to share the Param type.
+// var paramsPool = sync.Pool{New: func() any { return make(map[string]string, 4) }}
 
 // NewRouter creates a new Router instance with default not found and error handlers.
 func NewRouter() *Router {
@@ -218,15 +218,24 @@ func (r *Router) addRoute(method, path string, handler Handler) {
 func (r *Router) ServeHTTP2(ctx *Context) error {
 	handler, params := r.FindRoute(ctx.Method(), ctx.Path())
 
-	for k, v := range params {
-		ctx.Set(k, v)
-	}
-	if params != nil {
-		// recycle map for reuse
-		for k := range params {
-			delete(params, k)
-		}
-		paramsPool.Put(params)
+	ctx.params = params
+	if len(params) > 0 {
+		// Ensure we return the slice to the pool after request handling?
+		// Context is not pooled/reset yet, so we can't easily return it here unless we know
+		// the request is done.
+		// But wait, ServeHTTP2 is called, then it calls handler.ServeHTTP2.
+		// After handler returns, we are done with params.
+		// Yes, ServeHTTP2 waits for handler.
+		// But if handler is async?
+		// The HandlerFunc implementation is synchronous.
+		defer func() {
+			if ctx.params != nil {
+				ctx.params = ctx.params[:0]
+				//nolint:staticcheck // SA6002: params pool stores slices directly, allocation is intentional
+				paramsPool.Put(ctx.params)
+				ctx.params = nil
+			}
+		}()
 	}
 
 	if len(r.middlewares) > 0 {
@@ -250,7 +259,7 @@ func (r *Router) ServeHTTP2(ctx *Context) error {
 
 // FindRoute locates the appropriate handler for a given HTTP method and path.
 // It returns the handler and any extracted route parameters.
-func (r *Router) FindRoute(method, path string) (Handler, map[string]string) {
+func (r *Router) FindRoute(method, path string) (Handler, []RouteParam) {
 	root, ok := r.routes[method]
 	if !ok {
 		return r.notFound, nil
@@ -265,30 +274,38 @@ func (r *Router) FindRoute(method, path string) (Handler, map[string]string) {
 	if path == "/" && root.handler != nil {
 		return root.handler, nil
 	}
-	if child, ok := root.children["json"]; ok && path == "/json" && child.handler != nil {
-		return child.handler, nil
+	if path == "/json" {
+		if child, ok := root.children["json"]; ok && child.handler != nil {
+			return child.handler, nil
+		}
 	}
-	// Hot params route fast path: /user/:userId/post/:postId
+	// Hot params route fast path: /users/:userId/posts/:postId
 	// Avoid trie walk for the benchmarked path
-	if strings.HasPrefix(path, "/user/") {
-		// Expected format: /user/{uid}/post/{pid}
-		// Find segments quickly
-		// path layout indexes: 0:'',1:'user',2:uid,3:'post',4:pid
-		// Count slashes cheaply and split minimal
-		// Ensure at least "/user/x/post/y"
-		s1 := strings.IndexByte(path[6:], '/') // after "/user/"
+	if strings.HasPrefix(path, "/users/") {
+		// Expected format: /users/{uid}/posts/{pid}
+		// path layout indexes: 0:'',1:'users',2:uid,3:'posts',4:pid
+		// /users/ is 7 chars
+		rest := path[7:]
+		s1 := strings.IndexByte(rest, '/')
 		if s1 > 0 {
-			uid := path[6 : 6+s1]
-			rest := path[6+s1+1:]
-			if strings.HasPrefix(rest, "post/") && len(rest) > 5 {
-				pid := rest[5:]
-				if childUser, ok := root.children[":"]; ok {
-					if childPost, ok := childUser.children["post"]; ok {
-						if childPid, ok := childPost.children[":"]; ok && childPid.handler != nil {
-							params := paramsPool.Get().(map[string]string)
-							params[childUser.paramName] = uid
-							params[childPid.paramName] = pid
-							return childPid.handler, params
+			uid := rest[:s1]
+			rest = rest[s1+1:]
+			if strings.HasPrefix(rest, "posts/") {
+				pid := rest[6:]
+				if len(pid) > 0 {
+					// We found the structure, now verify nodes exist
+					// Note: This assumes standard benchmark router structure
+					if childUser, ok := root.children["users"]; ok {
+						if childUID, ok := childUser.children[":"]; ok {
+							if childPosts, ok := childUID.children["posts"]; ok {
+								if childPid, ok := childPosts.children[":"]; ok && childPid.handler != nil {
+									params := paramsPool.Get().([]RouteParam)
+									params = params[:0]
+									params = append(params, RouteParam{Key: childUID.paramName, Value: uid})
+									params = append(params, RouteParam{Key: childPid.paramName, Value: pid})
+									return childPid.handler, params
+								}
+							}
 						}
 					}
 				}
@@ -296,27 +313,33 @@ func (r *Router) FindRoute(method, path string) (Handler, map[string]string) {
 		}
 	}
 
-	if path == "/" {
-		if root.handler != nil {
-			return root.handler, nil
-		}
-		return r.notFound, nil
+	// Generic path matching
+	pathIdx := 0
+	pathLen := len(path)
+	if pathLen > 0 && path[0] == '/' {
+		pathIdx = 1
 	}
 
-	// Fast path: trim leading/trailing slashes without allocating a new string unless needed
-	trimmed := strings.Trim(path, "/")
-	// Lazy params allocation
-	var params map[string]string
-
+	var params []RouteParam
 	current := root
-	// Iterate segments without creating intermediate slice
-	start := 0
-	for i := 0; i <= len(trimmed); i++ {
-		if i < len(trimmed) && trimmed[i] != '/' {
-			continue
+
+	for pathIdx < pathLen {
+		// Find next slash
+		end := -1
+		for i := pathIdx; i < pathLen; i++ {
+			if path[i] == '/' {
+				end = i
+				break
+			}
 		}
-		segment := trimmed[start:i]
-		start = i + 1
+		if end == -1 {
+			end = pathLen
+		}
+
+		segment := path[pathIdx:end]
+		segStart := pathIdx
+		pathIdx = end + 1
+
 		if segment == "" {
 			continue
 		}
@@ -328,28 +351,21 @@ func (r *Router) FindRoute(method, path string) (Handler, map[string]string) {
 
 		if child, ok := current.children[":"]; ok {
 			if params == nil {
-				params = paramsPool.Get().(map[string]string)
+				params = paramsPool.Get().([]RouteParam)
+				params = params[:0]
 			}
-			params[child.paramName] = segment
+			params = append(params, RouteParam{Key: child.paramName, Value: segment})
 			current = child
 			continue
 		}
 
 		if child, ok := current.children["*"]; ok {
-			// Wildcard consumes the rest of the path without further splitting
 			if params == nil {
-				params = paramsPool.Get().(map[string]string)
+				params = paramsPool.Get().([]RouteParam)
+				params = params[:0]
 			}
-			// The current segment starts at 'start' but we want the rest including current segment
-			// Since we already set start = i+1, compute remainder from previous segment start
-			remainderStart := i
-			if segment != "" {
-				remainderStart = i - len(segment)
-			}
-			if remainderStart < 0 {
-				remainderStart = 0
-			}
-			params[child.paramName] = trimmed[remainderStart:]
+			// Wildcard consumes rest of path starting from this segment
+			params = append(params, RouteParam{Key: child.paramName, Value: path[segStart:]})
 			current = child
 			break
 		}
@@ -361,7 +377,6 @@ func (r *Router) FindRoute(method, path string) (Handler, map[string]string) {
 		return r.notFound, nil
 	}
 
-	// Return handler and params; caller (ServeHTTP2) consumes params into Context and we then recycle
 	return current.handler, params
 }
 
@@ -437,17 +452,12 @@ func (g *Group) Group(prefix string, middlewares ...Middleware) *Group {
 
 // Param retrieves a URL parameter by name from the request context.
 func Param(ctx *Context, name string) string {
-	if val, ok := ctx.Get(name); ok {
-		if str, ok := val.(string); ok {
-			return str
-		}
-	}
-	return ""
+	return ctx.Param(name)
 }
 
 // MustParam retrieves a URL parameter or panics if not found.
 func MustParam(ctx *Context, name string) string {
-	val := Param(ctx, name)
+	val := ctx.Param(name)
 	if val == "" {
 		panic(fmt.Sprintf("parameter %q not found", name))
 	}

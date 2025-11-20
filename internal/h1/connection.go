@@ -288,7 +288,7 @@ type h1ResponseWriter struct {
 	writer *ResponseWriter
 }
 
-func (w *h1ResponseWriter) WriteResponse(_ uint32, status int, headers [][2]string, body []byte) error {
+func (w *h1ResponseWriter) WriteResponse(_ *stream.Stream, status int, headers [][2]string, body []byte) error {
 	// For H1, end the response on each call to avoid unsolicited extra writes
 	endResponse := true
 	return w.writer.WriteResponse(status, headers, body, endResponse)

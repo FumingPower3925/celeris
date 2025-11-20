@@ -231,7 +231,7 @@ func TestContext_Param(t *testing.T) {
 	s := stream.NewStream(1)
 	ctx := newContext(context.Background(), s, nil)
 
-	ctx.Set("id", "123")
+	ctx.params = []RouteParam{{Key: "id", Value: "123"}}
 
 	if ctx.Param("id") != "123" {
 		t.Errorf("Expected param '123', got %s", ctx.Param("id"))

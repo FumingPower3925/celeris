@@ -134,12 +134,12 @@ func (a *streamHandlerAdapter) SetConnection(conn stream.ResponseWriter) {
 }
 
 func (a *streamHandlerAdapter) HandleStream(ctx context.Context, s *stream.Stream) error {
-	writeResponse := func(streamID uint32, status int, headers [][2]string, body []byte) error {
+	writeResponse := func(_ uint32, status int, headers [][2]string, body []byte) error {
 		if s.ResponseWriter == nil {
 			return fmt.Errorf("no response writer available")
 		}
 
-		return s.ResponseWriter.WriteResponse(streamID, status, headers, body)
+		return s.ResponseWriter.WriteResponse(s, status, headers, body)
 	}
 
 	pushPromise := func(streamID uint32, path string, headers [][2]string) error {
@@ -152,7 +152,9 @@ func (a *streamHandlerAdapter) HandleStream(ctx context.Context, s *stream.Strea
 	celerisCtx := newContext(ctx, s, writeResponse)
 	celerisCtx.pushPromise = pushPromise
 
-	return a.handler.ServeHTTP2(celerisCtx)
+	err := a.handler.ServeHTTP2(celerisCtx)
+	celerisCtx.Release()
+	return err
 }
 
 // HandleH1Fast allows the adapter to serve an HTTP/1.1 request directly using a pre-built Context.
@@ -165,5 +167,7 @@ func (a *streamHandlerAdapter) HandleH1Fast(ctx context.Context, method, path, a
 	} else {
 		c = NewContextH1(ctx, method, path, authority, reqHeaders, body, write)
 	}
-	return a.handler.ServeHTTP2(c)
+	err := a.handler.ServeHTTP2(c)
+	c.Release()
+	return err
 }

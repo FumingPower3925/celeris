@@ -4,6 +4,7 @@ go 1.25.2
 
 require (
 	github.com/andybalholm/brotli v1.2.0
+	github.com/goccy/go-json v0.10.2
 	github.com/panjf2000/gnet/v2 v2.9.4
 	github.com/prometheus/client_golang v1.23.2
 	go.opentelemetry.io/otel v1.38.0
@@ -32,6 +33,6 @@ require (
 	golang.org/x/sync v0.17.0 // indirect
 	golang.org/x/sys v0.37.0 // indirect
 	golang.org/x/text v0.30.0 // indirect
-	google.golang.org/protobuf v1.36.8 // indirect
+	google.golang.org/protobuf v1.36.9 // indirect
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1 // indirect
 )
