@@ -219,24 +219,7 @@ func (r *Router) ServeHTTP2(ctx *Context) error {
 	handler, params := r.FindRoute(ctx.Method(), ctx.Path())
 
 	ctx.params = params
-	if len(params) > 0 {
-		// Ensure we return the slice to the pool after request handling?
-		// Context is not pooled/reset yet, so we can't easily return it here unless we know
-		// the request is done.
-		// But wait, ServeHTTP2 is called, then it calls handler.ServeHTTP2.
-		// After handler returns, we are done with params.
-		// Yes, ServeHTTP2 waits for handler.
-		// But if handler is async?
-		// The HandlerFunc implementation is synchronous.
-		defer func() {
-			if ctx.params != nil {
-				ctx.params = ctx.params[:0]
-				//nolint:staticcheck // SA6002: params pool stores slices directly, allocation is intentional
-				paramsPool.Put(ctx.params)
-				ctx.params = nil
-			}
-		}()
-	}
+	// Note: params are returned to pool in Context.Reset() called via Release()
 
 	if len(r.middlewares) > 0 {
 		handler = Chain(r.middlewares...)(handler)

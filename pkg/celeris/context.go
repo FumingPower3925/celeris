@@ -53,6 +53,29 @@ type RouteParam struct {
 	Value string
 }
 
+// Pre-computed content-length strings for common small sizes to avoid strconv.Itoa
+var contentLengthStrings = [...]string{
+	"0", "1", "2", "3", "4", "5", "6", "7", "8", "9",
+	"10", "11", "12", "13", "14", "15", "16", "17", "18", "19",
+	"20", "21", "22", "23", "24", "25", "26", "27", "28", "29",
+	"30", "31", "32", "33", "34", "35", "36", "37", "38", "39",
+	"40", "41", "42", "43", "44", "45", "46", "47", "48", "49",
+	"50", "51", "52", "53", "54", "55", "56", "57", "58", "59",
+	"60", "61", "62", "63", "64", "65", "66", "67", "68", "69",
+	"70", "71", "72", "73", "74", "75", "76", "77", "78", "79",
+	"80", "81", "82", "83", "84", "85", "86", "87", "88", "89",
+	"90", "91", "92", "93", "94", "95", "96", "97", "98", "99",
+	"100",
+}
+
+// formatContentLength returns a string for the content-length, using pre-computed values for small sizes.
+func formatContentLength(n int) string {
+	if n >= 0 && n <= 100 {
+		return contentLengthStrings[n]
+	}
+	return strconv.Itoa(n)
+}
+
 var responseBufPool = sync.Pool{New: func() any { return new(bytes.Buffer) }}
 var ctxValuesPool = sync.Pool{New: func() any { return make(map[string]interface{}, 8) }}
 var paramsPool = sync.Pool{New: func() any { return make([]RouteParam, 0, 4) }}
@@ -453,7 +476,7 @@ func (c *Context) JSON(status int, v interface{}) error {
 		c.writeMu.Unlock()
 		return err
 	}
-	c.responseHeaders.headers = append(c.responseHeaders.headers, [2]string{"content-length", strconv.Itoa(len(data))})
+	c.responseHeaders.headers = append(c.responseHeaders.headers, [2]string{"content-length", formatContentLength(len(data))})
 	_, err = c.responseBody.Write(data)
 	c.writeMu.Unlock()
 	if err != nil {
@@ -467,8 +490,14 @@ func (c *Context) String(status int, format string, values ...interface{}) error
 	c.writeMu.Lock()
 	c.statusCode = status
 	c.responseHeaders.headers = append(c.responseHeaders.headers, [2]string{"content-type", "text/plain; charset=utf-8"})
-	s := fmt.Sprintf(format, values...)
-	c.responseHeaders.headers = append(c.responseHeaders.headers, [2]string{"content-length", strconv.Itoa(len(s))})
+	// Fast path: when no format values, use format string directly (common case)
+	var s string
+	if len(values) == 0 {
+		s = format
+	} else {
+		s = fmt.Sprintf(format, values...)
+	}
+	c.responseHeaders.headers = append(c.responseHeaders.headers, [2]string{"content-length", formatContentLength(len(s))})
 	c.writeMu.Unlock()
 	return c.flushWithBody([]byte(s))
 }
@@ -478,7 +507,7 @@ func (c *Context) HTML(status int, html string) error {
 	c.writeMu.Lock()
 	c.statusCode = status
 	c.responseHeaders.headers = append(c.responseHeaders.headers, [2]string{"content-type", "text/html; charset=utf-8"})
-	c.responseHeaders.headers = append(c.responseHeaders.headers, [2]string{"content-length", strconv.Itoa(len(html))})
+	c.responseHeaders.headers = append(c.responseHeaders.headers, [2]string{"content-length", formatContentLength(len(html))})
 	c.writeMu.Unlock()
 	return c.flushWithBody([]byte(html))
 }
@@ -488,7 +517,7 @@ func (c *Context) Data(status int, contentType string, data []byte) error {
 	c.writeMu.Lock()
 	c.statusCode = status
 	c.responseHeaders.headers = append(c.responseHeaders.headers, [2]string{"content-type", contentType})
-	c.responseHeaders.headers = append(c.responseHeaders.headers, [2]string{"content-length", strconv.Itoa(len(data))})
+	c.responseHeaders.headers = append(c.responseHeaders.headers, [2]string{"content-length", formatContentLength(len(data))})
 	c.writeMu.Unlock()
 	return c.flushWithBody(data)
 }
@@ -498,7 +527,7 @@ func (c *Context) Plain(status int, s string) error {
 	c.writeMu.Lock()
 	c.statusCode = status
 	c.responseHeaders.headers = append(c.responseHeaders.headers, [2]string{"content-type", "text/plain; charset=utf-8"})
-	c.responseHeaders.headers = append(c.responseHeaders.headers, [2]string{"content-length", strconv.Itoa(len(s))})
+	c.responseHeaders.headers = append(c.responseHeaders.headers, [2]string{"content-length", formatContentLength(len(s))})
 	c.writeMu.Unlock()
 	return c.flushWithBody([]byte(s))
 }
