@@ -13,7 +13,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"unsafe"
 
 	"github.com/albertbausili/celeris/internal/h2/stream"
 	json "github.com/goccy/go-json"
@@ -79,9 +78,6 @@ func formatContentLength(n int) string {
 
 // stringToBytes returns a zero-copy []byte view of s.
 // The returned slice must not be modified and is only valid while s is valid.
-func stringToBytes(s string) []byte {
-	return unsafe.Slice(unsafe.StringData(s), len(s))
-}
 
 // Pre-built header pairs for common content-types (avoids [2]string allocation per request)
 var headerTextPlain = [2]string{"content-type", "text/plain; charset=utf-8"}
@@ -210,6 +206,7 @@ func (c *Context) Reset() {
 	c.body = nil
 	c.stream = nil
 	c.ctx = nil
+	c.h1Write = nil
 	c.writeResponse = nil
 	c.pushPromise = nil
 	c.hasFlushed = false
@@ -483,7 +480,7 @@ func (c *Context) JSON(status int, v interface{}) error {
 	c.writeMu.Lock()
 	c.statusCode = status
 	// Avoid map allocation: append headers directly
-	c.responseHeaders.headers = append(c.responseHeaders.headers, [2]string{"content-type", "application/json"})
+	c.responseHeaders.headers = append(c.responseHeaders.headers, headerJSON)
 	data, err := json.Marshal(v)
 	if err != nil {
 		c.writeMu.Unlock()
@@ -513,7 +510,7 @@ func (c *Context) String(status int, format string, values ...interface{}) error
 	c.responseHeaders.headers = append(c.responseHeaders.headers, headerTextPlain)
 	c.responseHeaders.headers = append(c.responseHeaders.headers, [2]string{"content-length", formatContentLength(len(s))})
 	c.writeMu.Unlock()
-	return c.flushWithBody(stringToBytes(s))
+	return c.flushWithBody([]byte(s))
 }
 
 // HTML sends an HTML response with the given status code.
@@ -523,7 +520,7 @@ func (c *Context) HTML(status int, html string) error {
 	c.responseHeaders.headers = append(c.responseHeaders.headers, headerTextHTML)
 	c.responseHeaders.headers = append(c.responseHeaders.headers, [2]string{"content-length", formatContentLength(len(html))})
 	c.writeMu.Unlock()
-	return c.flushWithBody(stringToBytes(html))
+	return c.flushWithBody([]byte(html))
 }
 
 // Data sends a response with custom content type and data.
@@ -543,7 +540,7 @@ func (c *Context) Plain(status int, s string) error {
 	c.responseHeaders.headers = append(c.responseHeaders.headers, headerTextPlain)
 	c.responseHeaders.headers = append(c.responseHeaders.headers, [2]string{"content-length", formatContentLength(len(s))})
 	c.writeMu.Unlock()
-	return c.flushWithBody(stringToBytes(s))
+	return c.flushWithBody([]byte(s))
 }
 
 // NoContent sends a response with no body content.
@@ -576,11 +573,13 @@ func (c *Context) flush() error {
 	}
 	var err error
 	// Fast path for HTTP/1.1: use h1Write directly to avoid closure overhead
-	if c.h1Write != nil {
+	// Fast path for HTTP/1.1: use h1Write directly to avoid closure overhead
+	switch {
+	case c.h1Write != nil:
 		err = c.h1Write(c.statusCode, c.responseHeaders.All(), body)
-	} else if c.writeResponse != nil {
+	case c.writeResponse != nil:
 		err = c.writeResponse(c.StreamID, c.statusCode, c.responseHeaders.All(), body)
-	} else {
+	default:
 		return fmt.Errorf("no write response function")
 	}
 	c.responseBody.Reset()
@@ -602,11 +601,13 @@ func (c *Context) flush() error {
 func (c *Context) flushWithBody(body []byte) error {
 	var err error
 	// Fast path for HTTP/1.1: use h1Write directly to avoid closure overhead
-	if c.h1Write != nil {
+	// Fast path for HTTP/1.1: use h1Write directly to avoid closure overhead
+	switch {
+	case c.h1Write != nil:
 		err = c.h1Write(c.statusCode, c.responseHeaders.All(), body)
-	} else if c.writeResponse != nil {
+	case c.writeResponse != nil:
 		err = c.writeResponse(c.StreamID, c.statusCode, c.responseHeaders.All(), body)
-	} else {
+	default:
 		return fmt.Errorf("no write response function")
 	}
 	c.responseBody.Reset()
