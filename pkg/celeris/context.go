@@ -29,9 +29,11 @@ type Context struct {
 	stream          *stream.Stream
 	ctx             context.Context
 	writeResponse   func(streamID uint32, status int, headers [][2]string, body []byte) error
-	pushPromise     func(streamID uint32, path string, headers [][2]string) error
-	values          map[string]interface{}
-	hasFlushed      bool
+	// h1Write is the direct write function for HTTP/1.1 to avoid closure allocation
+	h1Write     func(status int, headers [][2]string, body []byte) error
+	pushPromise func(streamID uint32, path string, headers [][2]string) error
+	values      map[string]interface{}
+	hasFlushed  bool
 	// streamBuffer accumulates chunks when Flush is called multiple times
 	streamBuffer []byte
 	// cached pseudo-headers for fast access
@@ -338,15 +340,20 @@ func NewContextH1NoHeaders(ctx context.Context, method, path, authority string, 
 	}
 
 	c.StreamID = 1
-	c.body = bytes.NewReader(body)
+	// Avoid bytes.NewReader when body is nil (common case)
+	if len(body) > 0 {
+		c.body = bytes.NewReader(body)
+	} else {
+		c.body = nil
+	}
 	c.statusCode = 200
 	c.responseBody = responseBufPool.Get().(*bytes.Buffer)
 	c.responseBody.Reset()
 	c.stream = nil
 	c.ctx = ctx
-	c.writeResponse = func(_ uint32, status int, headers [][2]string, b []byte) error {
-		return write(status, headers, b)
-	}
+	// Store write function directly to avoid closure allocation
+	c.h1Write = write
+	c.writeResponse = nil // Not used for H1
 	c.pushPromise = nil
 	c.hasFlushed = false
 	c.method = method
@@ -518,16 +525,21 @@ func (c *Context) flush() error {
 	if c.hasFlushed {
 		return nil
 	}
-	if c.writeResponse == nil {
-		return fmt.Errorf("no write response function")
-	}
 	var body []byte
 	if len(c.streamBuffer) > 0 {
 		body = c.streamBuffer
 	} else {
 		body = c.responseBody.Bytes()
 	}
-	err := c.writeResponse(c.StreamID, c.statusCode, c.responseHeaders.All(), body)
+	var err error
+	// Fast path for HTTP/1.1: use h1Write directly to avoid closure overhead
+	if c.h1Write != nil {
+		err = c.h1Write(c.statusCode, c.responseHeaders.All(), body)
+	} else if c.writeResponse != nil {
+		err = c.writeResponse(c.StreamID, c.statusCode, c.responseHeaders.All(), body)
+	} else {
+		return fmt.Errorf("no write response function")
+	}
 	c.responseBody.Reset()
 	c.hasFlushed = true
 	if len(c.streamBuffer) > 0 {
@@ -545,10 +557,15 @@ func (c *Context) flush() error {
 // flushWithBody writes the provided body directly, avoiding copying into responseBody.
 // flushWithBody writes the provided body directly to the response.
 func (c *Context) flushWithBody(body []byte) error {
-	if c.writeResponse == nil {
+	var err error
+	// Fast path for HTTP/1.1: use h1Write directly to avoid closure overhead
+	if c.h1Write != nil {
+		err = c.h1Write(c.statusCode, c.responseHeaders.All(), body)
+	} else if c.writeResponse != nil {
+		err = c.writeResponse(c.StreamID, c.statusCode, c.responseHeaders.All(), body)
+	} else {
 		return fmt.Errorf("no write response function")
 	}
-	err := c.writeResponse(c.StreamID, c.statusCode, c.responseHeaders.All(), body)
 	c.responseBody.Reset()
 	c.hasFlushed = true
 	if c.values != nil {

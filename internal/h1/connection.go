@@ -41,6 +41,12 @@ func NewConnection(ctx context.Context, c gnet.Conn, handler stream.Handler, log
 	}
 }
 
+// write is the response writer callback for HandleH1Fast.
+// Using a method instead of a closure avoids allocation per request.
+func (c *Connection) write(status int, headers [][2]string, body []byte) error {
+	return c.writer.WriteResponse(status, headers, body, true)
+}
+
 // HandleData processes incoming HTTP/1.1 data.
 func (c *Connection) HandleData(data []byte) error {
 	// Fast-path: if there is no pending leftover, parse directly from incoming buffer to avoid copy
@@ -81,17 +87,15 @@ func (c *Connection) HandleData(data []byte) error {
 			// No body: handle request directly using fast adapter when available
 			c.writer.Reset(req.KeepAlive)
 			if adapter, ok := c.handler.(h1FastAdapter); ok {
-				writeFn := func(status int, headers [][2]string, body []byte) error {
-					return c.writer.WriteResponse(status, headers, body, true)
-				}
+				// Use method receiver instead of closure to avoid allocation
 				// For no-body and common GET paths, avoid passing headers slice to minimize copies
 				if len(req.Headers) == 0 || (req.Method == "GET" && !req.ChunkedEncoding && req.ContentLength <= 0) {
-					if err := adapter.HandleH1Fast(c.ctx, req.Method, req.Path, req.Host, nil, nil, writeFn); err != nil {
+					if err := adapter.HandleH1Fast(c.ctx, req.Method, req.Path, req.Host, nil, nil, c.write); err != nil {
 						c.logger.Printf("Handler error: %v", err)
 						return c.sendError(500, "Internal Server Error")
 					}
 					// Continue processing subsequent pipelined requests (was break - bug fix)
-				} else if err := adapter.HandleH1Fast(c.ctx, req.Method, req.Path, req.Host, req.Headers, nil, writeFn); err != nil {
+				} else if err := adapter.HandleH1Fast(c.ctx, req.Method, req.Path, req.Host, req.Headers, nil, c.write); err != nil {
 					c.logger.Printf("Handler error: %v", err)
 					return c.sendError(500, "Internal Server Error")
 				}
@@ -213,11 +217,9 @@ func (c *Connection) handleRequest(req *Request, headerBytes int) error {
 
 	// Fast path: call adapter's H1 direct handler when available, otherwise fallback
 	if adapter, ok := c.handler.(h1FastAdapter); ok {
-		writeFn := func(status int, headers [][2]string, body []byte) error {
-			return c.writer.WriteResponse(status, headers, body, true)
-		}
+		// Use method receiver instead of closure to avoid allocation
 		c.writer.Reset(req.KeepAlive)
-		if err := adapter.HandleH1Fast(c.ctx, req.Method, req.Path, req.Host, req.Headers, bodyData, writeFn); err != nil {
+		if err := adapter.HandleH1Fast(c.ctx, req.Method, req.Path, req.Host, req.Headers, bodyData, c.write); err != nil {
 			c.logger.Printf("Handler error: %v", err)
 			return c.sendError(500, "Internal Server Error")
 		}

@@ -10,7 +10,21 @@ import (
 
 // Pre-allocated common headers to avoid allocations
 var (
-	statusLine200       = []byte("HTTP/1.1 200 OK\r\n")
+	// Pre-built status lines for common HTTP status codes (avoid strconv)
+	statusLine200 = []byte("HTTP/1.1 200 OK\r\n")
+	statusLine201 = []byte("HTTP/1.1 201 Created\r\n")
+	statusLine204 = []byte("HTTP/1.1 204 No Content\r\n")
+	statusLine301 = []byte("HTTP/1.1 301 Moved Permanently\r\n")
+	statusLine302 = []byte("HTTP/1.1 302 Found\r\n")
+	statusLine304 = []byte("HTTP/1.1 304 Not Modified\r\n")
+	statusLine400 = []byte("HTTP/1.1 400 Bad Request\r\n")
+	statusLine401 = []byte("HTTP/1.1 401 Unauthorized\r\n")
+	statusLine403 = []byte("HTTP/1.1 403 Forbidden\r\n")
+	statusLine404 = []byte("HTTP/1.1 404 Not Found\r\n")
+	statusLine500 = []byte("HTTP/1.1 500 Internal Server Error\r\n")
+	statusLine502 = []byte("HTTP/1.1 502 Bad Gateway\r\n")
+	statusLine503 = []byte("HTTP/1.1 503 Service Unavailable\r\n")
+
 	headerContentLength = []byte("content-length: ")
 	headerConnection    = []byte("connection: ")
 	headerClose         = []byte("close\r\n")
@@ -110,10 +124,35 @@ func (w *ResponseWriter) WriteResponse(status int, headers [][2]string, body []b
 			buf = make([]byte, 0, expected)
 		}
 
-		// Status line (fast-path for 200)
-		if status == 200 {
+		// Status line (fast-path for common status codes using pre-built bytes)
+		switch status {
+		case 200:
 			buf = append(buf, statusLine200...)
-		} else {
+		case 201:
+			buf = append(buf, statusLine201...)
+		case 204:
+			buf = append(buf, statusLine204...)
+		case 301:
+			buf = append(buf, statusLine301...)
+		case 302:
+			buf = append(buf, statusLine302...)
+		case 304:
+			buf = append(buf, statusLine304...)
+		case 400:
+			buf = append(buf, statusLine400...)
+		case 401:
+			buf = append(buf, statusLine401...)
+		case 403:
+			buf = append(buf, statusLine403...)
+		case 404:
+			buf = append(buf, statusLine404...)
+		case 500:
+			buf = append(buf, statusLine500...)
+		case 502:
+			buf = append(buf, statusLine502...)
+		case 503:
+			buf = append(buf, statusLine503...)
+		default:
 			buf = append(buf, "HTTP/1.1 "...)
 			buf = strconv.AppendInt(buf, int64(status), 10)
 			buf = append(buf, ' ')
