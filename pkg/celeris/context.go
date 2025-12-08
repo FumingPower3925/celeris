@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"unsafe"
 
 	"github.com/albertbausili/celeris/internal/h2/stream"
 	json "github.com/goccy/go-json"
@@ -74,6 +75,12 @@ func formatContentLength(n int) string {
 		return contentLengthStrings[n]
 	}
 	return strconv.Itoa(n)
+}
+
+// stringToBytes returns a zero-copy []byte view of s.
+// The returned slice must not be modified and is only valid while s is valid.
+func stringToBytes(s string) []byte {
+	return unsafe.Slice(unsafe.StringData(s), len(s))
 }
 
 var responseBufPool = sync.Pool{New: func() any { return new(bytes.Buffer) }}
@@ -499,7 +506,7 @@ func (c *Context) String(status int, format string, values ...interface{}) error
 	}
 	c.responseHeaders.headers = append(c.responseHeaders.headers, [2]string{"content-length", formatContentLength(len(s))})
 	c.writeMu.Unlock()
-	return c.flushWithBody([]byte(s))
+	return c.flushWithBody(stringToBytes(s))
 }
 
 // HTML sends an HTML response with the given status code.
@@ -509,7 +516,7 @@ func (c *Context) HTML(status int, html string) error {
 	c.responseHeaders.headers = append(c.responseHeaders.headers, [2]string{"content-type", "text/html; charset=utf-8"})
 	c.responseHeaders.headers = append(c.responseHeaders.headers, [2]string{"content-length", formatContentLength(len(html))})
 	c.writeMu.Unlock()
-	return c.flushWithBody([]byte(html))
+	return c.flushWithBody(stringToBytes(html))
 }
 
 // Data sends a response with custom content type and data.
@@ -529,7 +536,7 @@ func (c *Context) Plain(status int, s string) error {
 	c.responseHeaders.headers = append(c.responseHeaders.headers, [2]string{"content-type", "text/plain; charset=utf-8"})
 	c.responseHeaders.headers = append(c.responseHeaders.headers, [2]string{"content-length", formatContentLength(len(s))})
 	c.writeMu.Unlock()
-	return c.flushWithBody([]byte(s))
+	return c.flushWithBody(stringToBytes(s))
 }
 
 // NoContent sends a response with no body content.
