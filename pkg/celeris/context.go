@@ -97,7 +97,8 @@ type Headers struct {
 // NewHeaders creates a new Headers instance.
 func NewHeaders() Headers {
 	return Headers{
-		headers: make([][2]string, 0),
+		// Pre-allocate capacity for typical response (content-type, content-length, etc.)
+		headers: make([][2]string, 0, 4),
 		// index is allocated lazily on first Set to avoid per-request map alloc
 		index: nil,
 	}
@@ -494,16 +495,17 @@ func (c *Context) JSON(status int, v interface{}) error {
 
 // String sends a formatted text response with the given status code.
 func (c *Context) String(status int, format string, values ...interface{}) error {
-	c.writeMu.Lock()
-	c.statusCode = status
-	c.responseHeaders.headers = append(c.responseHeaders.headers, [2]string{"content-type", "text/plain; charset=utf-8"})
 	// Fast path: when no format values, use format string directly (common case)
+	// Do string formatting outside of lock scope
 	var s string
 	if len(values) == 0 {
 		s = format
 	} else {
 		s = fmt.Sprintf(format, values...)
 	}
+	c.writeMu.Lock()
+	c.statusCode = status
+	c.responseHeaders.headers = append(c.responseHeaders.headers, [2]string{"content-type", "text/plain; charset=utf-8"})
 	c.responseHeaders.headers = append(c.responseHeaders.headers, [2]string{"content-length", formatContentLength(len(s))})
 	c.writeMu.Unlock()
 	return c.flushWithBody(stringToBytes(s))
