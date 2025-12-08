@@ -34,7 +34,35 @@ test-integration:
 # Run comparative benchmarks
 test-benchmark:
 	@echo "Running comparative benchmarks..."
-	@cd test/benchmark && go test -bench=. -benchmem -benchtime=3s
+	@cd test/benchmark && go test -bench=. -benchmem
+
+# Benchmark targets
+.PHONY: bench-sync-h1 bench-sync-h2 bench-sync-hybrid bench-async-h1 bench-async-h2 bench-async-hybrid bench-all
+bench-sync-h1:
+	@echo "Running Sync HTTP/1.1 Benchmarks..."
+	@cd test/benchmark/sync/http1 && go run main.go
+
+bench-sync-h2:
+	@echo "Running Sync HTTP/2 Benchmarks..."
+	@cd test/benchmark/sync/http2 && go run main.go
+
+bench-sync-hybrid:
+	@echo "Running Sync Hybrid Benchmarks..."
+	@cd test/benchmark/sync/hybrid && go run main.go
+
+bench-async-h1:
+	@echo "Running Async HTTP/1.1 Benchmarks..."
+	@cd test/benchmark/async/http1 && go run main.go
+
+bench-async-h2:
+	@echo "Running Async HTTP/2 Benchmarks..."
+	@cd test/benchmark/async/http2 && go run main.go
+
+bench-async-hybrid:
+	@echo "Running Async Hybrid Benchmarks..."
+	@cd test/benchmark/async/hybrid && go run main.go
+
+bench-all: bench-sync-h1 bench-sync-h2 bench-sync-hybrid bench-async-h1 bench-async-h2 bench-async-hybrid
 
 # Run incremental ramp-up benchmarks (both HTTP/1.1 and HTTP/2)
 test-rampup: test-rampup-h1 test-rampup-h2

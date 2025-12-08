@@ -90,9 +90,8 @@ func (c *Connection) HandleData(data []byte) error {
 						c.logger.Printf("Handler error: %v", err)
 						return c.sendError(500, "Internal Server Error")
 					}
-					break
-				}
-				if err := adapter.HandleH1Fast(c.ctx, req.Method, req.Path, req.Host, req.Headers, nil, writeFn); err != nil {
+					// Continue processing subsequent pipelined requests (was break - bug fix)
+				} else if err := adapter.HandleH1Fast(c.ctx, req.Method, req.Path, req.Host, req.Headers, nil, writeFn); err != nil {
 					c.logger.Printf("Handler error: %v", err)
 					return c.sendError(500, "Internal Server Error")
 				}
