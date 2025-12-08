@@ -83,6 +83,11 @@ func stringToBytes(s string) []byte {
 	return unsafe.Slice(unsafe.StringData(s), len(s))
 }
 
+// Pre-built header pairs for common content-types (avoids [2]string allocation per request)
+var headerTextPlain = [2]string{"content-type", "text/plain; charset=utf-8"}
+var headerTextHTML = [2]string{"content-type", "text/html; charset=utf-8"}
+var headerJSON = [2]string{"content-type", "application/json"}
+
 var responseBufPool = sync.Pool{New: func() any { return new(bytes.Buffer) }}
 var ctxValuesPool = sync.Pool{New: func() any { return make(map[string]interface{}, 8) }}
 var paramsPool = sync.Pool{New: func() any { return make([]RouteParam, 0, 4) }}
@@ -505,7 +510,7 @@ func (c *Context) String(status int, format string, values ...interface{}) error
 	}
 	c.writeMu.Lock()
 	c.statusCode = status
-	c.responseHeaders.headers = append(c.responseHeaders.headers, [2]string{"content-type", "text/plain; charset=utf-8"})
+	c.responseHeaders.headers = append(c.responseHeaders.headers, headerTextPlain)
 	c.responseHeaders.headers = append(c.responseHeaders.headers, [2]string{"content-length", formatContentLength(len(s))})
 	c.writeMu.Unlock()
 	return c.flushWithBody(stringToBytes(s))
@@ -515,7 +520,7 @@ func (c *Context) String(status int, format string, values ...interface{}) error
 func (c *Context) HTML(status int, html string) error {
 	c.writeMu.Lock()
 	c.statusCode = status
-	c.responseHeaders.headers = append(c.responseHeaders.headers, [2]string{"content-type", "text/html; charset=utf-8"})
+	c.responseHeaders.headers = append(c.responseHeaders.headers, headerTextHTML)
 	c.responseHeaders.headers = append(c.responseHeaders.headers, [2]string{"content-length", formatContentLength(len(html))})
 	c.writeMu.Unlock()
 	return c.flushWithBody(stringToBytes(html))
@@ -535,7 +540,7 @@ func (c *Context) Data(status int, contentType string, data []byte) error {
 func (c *Context) Plain(status int, s string) error {
 	c.writeMu.Lock()
 	c.statusCode = status
-	c.responseHeaders.headers = append(c.responseHeaders.headers, [2]string{"content-type", "text/plain; charset=utf-8"})
+	c.responseHeaders.headers = append(c.responseHeaders.headers, headerTextPlain)
 	c.responseHeaders.headers = append(c.responseHeaders.headers, [2]string{"content-length", formatContentLength(len(s))})
 	c.writeMu.Unlock()
 	return c.flushWithBody(stringToBytes(s))
