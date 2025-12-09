@@ -3,6 +3,7 @@ package h1
 import (
 	"log"
 	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/albertbausili/celeris/internal/date"
@@ -135,12 +136,13 @@ func (w *ResponseWriter) WriteResponse(status int, headers [][2]string, body []b
 		buf = append(buf, date.Current()...)
 		buf = append(buf, crlf...)
 
-		// Determine content-length upfront
+		// Determine content-length upfront and check for chunked encoding
 		hasContentLength := false
 		for _, h := range headers {
-			if h[0] == "content-length" {
+			if strings.EqualFold(h[0], "content-length") {
 				hasContentLength = true
-				break
+			} else if strings.EqualFold(h[0], "transfer-encoding") && strings.EqualFold(h[1], "chunked") {
+				w.chunkedMode = true
 			}
 		}
 

@@ -44,7 +44,7 @@ func NewConnection(ctx context.Context, c gnet.Conn, handler stream.Handler, log
 // write is the response writer callback for HandleH1Fast.
 // Using a method instead of a closure avoids allocation per request.
 func (c *Connection) write(status int, headers [][2]string, body []byte) error {
-	return c.writer.WriteResponse(status, headers, body, true)
+	return c.writer.WriteResponse(status, headers, body, false)
 }
 
 // HandleData processes incoming HTTP/1.1 data.
@@ -54,7 +54,7 @@ func (c *Connection) HandleData(data []byte) error {
 		// Support multiple pipelined requests in the same incoming buffer
 		offset := 0
 		for offset < len(data) {
-			c.parser.noStringHeaders = true
+			c.parser.noStringHeaders = false
 			c.parser.Reset(data[offset:])
 			c.req.Reset()
 			req := &c.req
@@ -92,18 +92,21 @@ func (c *Connection) HandleData(data []byte) error {
 				// Use method receiver instead of closure to avoid allocation
 				// For no-body and common GET paths, avoid passing headers slice to minimize copies
 				if len(req.Headers) == 0 || (req.Method == "GET" && !req.ChunkedEncoding && req.ContentLength <= 0) {
-					if err := adapter.HandleH1Fast(c.ctx, req.Method, req.Path, req.Host, nil, nil, c.write); err != nil {
+					if err := adapter.HandleH1Fast(c.ctx, req.Method, req.Path, req.Host, req.Headers, nil, c.write); err != nil {
 						if c.logger != nil {
 							c.logger.Printf("Handler error: %v", err)
 						}
 						return c.sendError(500, "Internal Server Error")
 					}
+					_ = c.writer.WriteResponse(200, nil, nil, true) // Ensure response is finished
 					// Continue processing subsequent pipelined requests (was break - bug fix)
 				} else if err := adapter.HandleH1Fast(c.ctx, req.Method, req.Path, req.Host, req.Headers, nil, c.write); err != nil {
 					if c.logger != nil {
 						c.logger.Printf("Handler error: %v", err)
 					}
 					return c.sendError(500, "Internal Server Error")
+				} else {
+					_ = c.writer.WriteResponse(200, nil, nil, true) // Ensure response is finished
 				}
 			} else {
 				s := c.requestToStream(req, nil)
@@ -233,6 +236,7 @@ func (c *Connection) handleRequest(req *Request, headerBytes int) error {
 			c.logger.Printf("Handler error: %v", err)
 			return c.sendError(500, "Internal Server Error")
 		}
+		_ = c.writer.WriteResponse(200, nil, nil, true) // Ensure response is finished
 	} else {
 		s := c.requestToStream(req, bodyData)
 		c.writer.Reset(req.KeepAlive)

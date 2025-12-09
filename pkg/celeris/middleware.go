@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -342,90 +343,167 @@ func CompressWithConfig(config CompressConfig) Middleware {
 				return next.ServeHTTP2(ctx)
 			}
 
-			// Create a wrapper to intercept the response
-			originalBuf := ctx.responseBody
-			tempBuf := responseBufPool.Get().(*bytes.Buffer)
-			tempBuf.Reset()
-			ctx.responseBody = tempBuf
+			// Capture original writers
+			originalWriteResponse := ctx.writeResponse
+			originalH1Write := ctx.h1Write
+
+			// Buffers to capture response
+			var bufferedBody bytes.Buffer
+			var bufferedHeaders [][2]string
+			var capturedStatus int
+			var capturedStreamID uint32
+
+			// Define wrapper function
+			wrapper := func(streamID uint32, status int, headers [][2]string, body []byte) error { //nolint:unparam
+				capturedStreamID = streamID
+				// Only capture status/headers if provided (first flush)
+				if len(headers) > 0 {
+					bufferedHeaders = headers
+					capturedStatus = status
+				}
+				// Append body
+				if len(body) > 0 {
+					bufferedBody.Write(body)
+				}
+				return nil
+			}
+
+			// Wrap writers
+			if ctx.h1Write != nil {
+				ctx.h1Write = func(status int, headers [][2]string, body []byte) error {
+					return wrapper(0, status, headers, body)
+				}
+			}
+			if ctx.writeResponse != nil {
+				ctx.writeResponse = func(streamID uint32, status int, headers [][2]string, body []byte) error {
+					return wrapper(streamID, status, headers, body)
+				}
+			}
 
 			// Execute handler
 			err := next.ServeHTTP2(ctx)
 
-			// Get response body
-			body := tempBuf.Bytes()
+			// Get full body
+			body := bufferedBody.Bytes()
 
-			// Restore original buffer
-			ctx.responseBody = originalBuf
-			tempBuf.Reset()
-			responseBufPool.Put(tempBuf)
-
-			// Check if we should compress
-			shouldCompress := len(body) >= config.MinSize
-
-			// Check content type exclusions
-			contentType := ctx.responseHeaders.Get("content-type")
-			for _, excluded := range config.ExcludedTypes {
-				if strings.HasPrefix(contentType, excluded) {
-					shouldCompress = false
-					break
+			// Check headers and size
+			contentType := getContentType(bufferedHeaders)
+			if len(bufferedHeaders) == 0 {
+				bufferedHeaders = ctx.responseHeaders.All()
+				capturedStatus = ctx.Status()
+				if capturedStatus == 0 {
+					capturedStatus = 200
 				}
 			}
 
-			if !shouldCompress {
-				_, writeErr := ctx.responseBody.Write(body)
-				if writeErr != nil && err == nil {
+			// Define sender function
+			send := func(headers [][2]string, data []byte) error {
+				if originalH1Write != nil {
+					return originalH1Write(capturedStatus, headers, data)
+				}
+				if originalWriteResponse != nil {
+					return originalWriteResponse(capturedStreamID, capturedStatus, headers, data)
+				}
+				return nil
+			}
+
+			if !shouldCompressBody(body, contentType, config) {
+				if writeErr := send(bufferedHeaders, body); writeErr != nil && err == nil {
 					err = writeErr
 				}
 				return err
 			}
 
-			// Compress the body
-			var compressed bytes.Buffer
+			// Compress
+			var compressedBody []byte
 			var encoding string
 
 			if supportsBrotli {
-				// Brotli compression
-				writer := brotli.NewWriterLevel(&compressed, config.Level)
-				if _, werr := writer.Write(body); werr != nil {
-					_ = writer.Close()
-					// Fallback to uncompressed
-					_, _ = ctx.responseBody.Write(body)
-					return err
-				}
-				_ = writer.Close()
+				compressedBody, err = compressBuffer(body, "br", config.Level)
 				encoding = "br"
 			} else if supportsGzip {
-				// Gzip compression
-				writer, _ := gzip.NewWriterLevel(&compressed, config.Level)
-				if _, werr := writer.Write(body); werr != nil {
-					_ = writer.Close()
-					// Fallback to uncompressed
-					_, _ = ctx.responseBody.Write(body)
-					return err
-				}
-				_ = writer.Close()
+				compressedBody, err = compressBuffer(body, "gzip", config.Level)
 				encoding = "gzip"
 			}
 
-			// Only use compressed version if it's actually smaller
-			if compressed.Len() < len(body) && compressed.Len() > 0 {
-				ctx.SetHeader("Content-Encoding", encoding)
-				ctx.SetHeader("Vary", "Accept-Encoding")
-				_, writeErr := ctx.responseBody.Write(compressed.Bytes())
-				if writeErr != nil && err == nil {
-					err = writeErr
-				}
-			} else {
-				// Compressed version is larger, use original
-				_, writeErr := ctx.responseBody.Write(body)
-				if writeErr != nil && err == nil {
-					err = writeErr
-				}
+			if err != nil || compressedBody == nil {
+				// Fallback to original
+				_ = send(bufferedHeaders, body)
+				return err
+			}
+
+			// Update headers
+			updateCompressionHeaders(&bufferedHeaders, encoding, len(compressedBody))
+
+			// Write compressed response
+			if writeErr := send(bufferedHeaders, compressedBody); writeErr != nil && err == nil {
+				err = writeErr
 			}
 
 			return err
 		})
 	}
+}
+
+// performCompression helper
+func compressBuffer(data []byte, encoding string, level int) ([]byte, error) {
+	var buf bytes.Buffer
+	if encoding == "br" {
+		writer := brotli.NewWriterLevel(&buf, level)
+		if _, err := writer.Write(data); err != nil {
+			_ = writer.Close() // Best effort close on write error
+			return nil, err
+		}
+		if err := writer.Close(); err != nil {
+			return nil, err
+		}
+	} else {
+		writer, _ := gzip.NewWriterLevel(&buf, level)
+		if _, err := writer.Write(data); err != nil {
+			_ = writer.Close()
+			return nil, err
+		}
+		if err := writer.Close(); err != nil {
+			return nil, err
+		}
+	}
+	return buf.Bytes(), nil
+}
+
+func shouldCompressBody(body []byte, contentType string, config CompressConfig) bool {
+	if len(body) < config.MinSize {
+		return false
+	}
+	for _, excluded := range config.ExcludedTypes {
+		if strings.HasPrefix(contentType, excluded) {
+			return false
+		}
+	}
+	return true
+}
+
+func getContentType(headers [][2]string) string {
+	for _, h := range headers {
+		if strings.EqualFold(h[0], "content-type") {
+			return h[1]
+		}
+	}
+	return ""
+}
+
+func updateCompressionHeaders(headers *[][2]string, encoding string, length int) {
+	// Remove Content-Length if present
+	newHeaders := make([][2]string, 0, len(*headers)+2)
+	for _, h := range *headers {
+		if !strings.EqualFold(h[0], "content-length") {
+			newHeaders = append(newHeaders, h)
+		}
+	}
+	// Add/Update headers
+	newHeaders = append(newHeaders, [2]string{"Content-Encoding", encoding})
+	newHeaders = append(newHeaders, [2]string{"Vary", "Accept-Encoding"})
+	newHeaders = append(newHeaders, [2]string{"Content-Length", strconv.Itoa(length)})
+	*headers = newHeaders
 }
 
 // RateLimiterConfig holds configuration for the RateLimiter middleware.

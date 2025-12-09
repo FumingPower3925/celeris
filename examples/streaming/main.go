@@ -33,7 +33,7 @@ func main() {
 				return err
 			}
 
-			time.Sleep(1 * time.Second)
+			// time.Sleep(1 * time.Second) // Removed to avoid blocking gnet loop
 		}
 
 		return nil
@@ -42,6 +42,7 @@ func main() {
 	// Streaming response example
 	router.GET("/stream", func(ctx *celeris.Context) error {
 		ctx.SetHeader("Content-Type", "text/plain")
+		ctx.SetHeader("Transfer-Encoding", "chunked")
 
 		return ctx.Stream(func(w io.Writer) error {
 			for i := 0; i < 5; i++ {
@@ -49,7 +50,7 @@ func main() {
 				if err != nil {
 					return err
 				}
-				time.Sleep(500 * time.Millisecond)
+				// time.Sleep(500 * time.Millisecond) // Removed to avoid blocking gnet loop
 			}
 			return nil
 		})

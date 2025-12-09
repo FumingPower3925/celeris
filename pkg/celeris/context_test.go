@@ -240,7 +240,14 @@ func TestContext_Param(t *testing.T) {
 
 func TestContext_SSE(t *testing.T) {
 	s := stream.NewStream(1)
-	ctx := newContext(context.Background(), s, nil)
+
+	var capturedBody []byte
+	mockWriter := func(_ uint32, _ int, _ [][2]string, body []byte) error {
+		capturedBody = append(capturedBody, body...)
+		return nil
+	}
+
+	ctx := newContext(context.Background(), s, mockWriter)
 
 	event := SSEEvent{
 		ID:    "123",
@@ -254,7 +261,7 @@ func TestContext_SSE(t *testing.T) {
 		t.Errorf("SSE error: %v", err)
 	}
 
-	body := ctx.responseBody.String()
+	body := string(capturedBody)
 
 	if !strings.Contains(body, "id: 123") {
 		t.Error("Expected SSE to contain id")
