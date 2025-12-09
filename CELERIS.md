@@ -38,7 +38,7 @@ This document provides comprehensive technical information about the Celeris HTT
 - **Protocol**: HTTP/2 cleartext (h2c) - no TLS requirement
 - **Transport**: gnet v2.9.4 (event-driven, multi-reactor)
 - **License**: MIT
-- **Repository**: github.com/albertbausili/celeris (intended for FumingPower3925 account)
+- **Repository**: github.com/FumingPower3925/celeris (intended for FumingPower3925 account)
 
 ### Core Features Implemented
 
@@ -1197,7 +1197,7 @@ package main
 
 import (
     "log"
-    "github.com/albertbausili/celeris/pkg/celeris"
+    "github.com/FumingPower3925/celeris/pkg/celeris"
 )
 
 func main() {
@@ -1757,7 +1757,7 @@ This is a solid foundation for v1.0. Future work includes:
 
 ### Call to Action
 
-- **Try it**: `go get github.com/albertbausili/celeris`
+- **Try it**: `go get github.com/FumingPower3925/celeris`
 - **Contribute**: Issues and PRs welcome
 - **Test it**: Validate against your use cases
 - **Provide Feedback**: Help shape the optimization phase

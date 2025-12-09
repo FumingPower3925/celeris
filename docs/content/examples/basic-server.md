@@ -14,7 +14,7 @@ package main
 
 import (
     "log"
-    "github.com/albertbausili/celeris/pkg/celeris"
+    "github.com/FumingPower3925/celeris/pkg/celeris"
 )
 
 func main() {
@@ -39,7 +39,7 @@ package main
 import (
     "log"
     "sync"
-    "github.com/albertbausili/celeris/pkg/celeris"
+    "github.com/FumingPower3925/celeris/pkg/celeris"
 )
 
 type User struct {
@@ -180,7 +180,7 @@ package main
 
 import (
     "log"
-    "github.com/albertbausili/celeris/pkg/celeris"
+    "github.com/FumingPower3925/celeris/pkg/celeris"
 )
 
 func main() {
@@ -250,7 +250,7 @@ import (
     "io/ioutil"
     "log"
     "path/filepath"
-    "github.com/albertbausili/celeris/pkg/celeris"
+    "github.com/FumingPower3925/celeris/pkg/celeris"
 )
 
 func main() {

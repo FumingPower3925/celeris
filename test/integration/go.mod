@@ -1,11 +1,11 @@
-module github.com/albertbausili/celeris/test/integration
+module github.com/FumingPower3925/celeris/test/integration
 
 go 1.25.2
 
-replace github.com/albertbausili/celeris => ../../
+replace github.com/FumingPower3925/celeris => ../../
 
 require (
-	github.com/albertbausili/celeris v0.0.0
+	github.com/FumingPower3925/celeris v0.0.0
 	golang.org/x/net v0.46.0
 )
 

@@ -15,7 +15,7 @@ weight: 1
 To install Celeris, use `go get`:
 
 ```bash
-go get -u github.com/albertbausili/celeris
+go get -u github.com/FumingPower3925/celeris
 ```
 
 ## Verify Installation
@@ -27,7 +27,7 @@ package main
 
 import (
     "log"
-    "github.com/albertbausili/celeris/pkg/celeris"
+    "github.com/FumingPower3925/celeris/pkg/celeris"
 )
 
 func main() {

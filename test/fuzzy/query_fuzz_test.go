@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/albertbausili/celeris/internal/h2/stream"
-	"github.com/albertbausili/celeris/pkg/celeris"
+	"github.com/FumingPower3925/celeris/internal/h2/stream"
+	"github.com/FumingPower3925/celeris/pkg/celeris"
 )
 
 // FuzzQueryParsing tests query parameter parsing with random path inputs.

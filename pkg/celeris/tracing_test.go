@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/albertbausili/celeris/internal/h2/stream"
+	"github.com/FumingPower3925/celeris/internal/h2/stream"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"

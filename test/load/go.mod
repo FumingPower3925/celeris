@@ -1,9 +1,9 @@
-module github.com/albertbausili/celeris/test/load
+module github.com/FumingPower3925/celeris/test/load
 
 go 1.25.2
 
 require (
-	github.com/albertbausili/celeris v0.0.0
+	github.com/FumingPower3925/celeris v0.0.0
 	golang.org/x/net v0.46.0
 )
 
@@ -36,4 +36,4 @@ require (
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1 // indirect
 )
 
-replace github.com/albertbausili/celeris => ../../
+replace github.com/FumingPower3925/celeris => ../../

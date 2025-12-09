@@ -1,7 +1,7 @@
 # Celeris HTTP/2 first framework
 
-[![Go Report Card](https://goreportcard.com/badge/github.com/albertbausili/celeris)](https://goreportcard.com/report/github.com/albertbausili/celeris)
-[![GoDoc](https://godoc.org/github.com/albertbausili/celeris?status.svg)](https://godoc.org/github.com/albertbausili/celeris)
+[![Go Report Card](https://goreportcard.com/badge/github.com/FumingPower3925/celeris)](https://goreportcard.com/report/github.com/FumingPower3925/celeris)
+[![GoDoc](https://godoc.org/github.com/FumingPower3925/celeris?status.svg)](https://godoc.org/github.com/FumingPower3925/celeris)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
 **Celeris HTTP/2 first framework** is a high-performance HTTP/2 first server built on top of [gnet](https://github.com/panjf2000/gnet) for blazing-fast networking and Go's `x/net/http2` for protocol compliance. It's designed to be simple, fast, and efficient.
@@ -19,7 +19,7 @@
 ## Installation
 
 ```bash
-go get -u github.com/albertbausili/celeris
+go get -u github.com/FumingPower3925/celeris
 ```
 
 ## Quick Start
@@ -29,7 +29,7 @@ package main
 
 import (
     "log"
-    "github.com/albertbausili/celeris/pkg/celeris"
+    "github.com/FumingPower3925/celeris/pkg/celeris"
 )
 
 func main() {
@@ -78,7 +78,7 @@ Celeris HTTP/2 first framework is built in three layers:
 
 ## Documentation
 
-Full documentation is available at [https://albertbausili.github.io/celeris](https://albertbausili.github.io/celeris)
+Full documentation is available at [https://FumingPower3925.github.io/celeris](https://FumingPower3925.github.io/celeris)
 
 - [Getting Started](docs/content/getting-started/)
 - [API Reference](docs/content/api-reference/)

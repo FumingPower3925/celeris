@@ -16,7 +16,7 @@ package main
 
 import (
     "log"
-    "github.com/albertbausili/celeris/pkg/celeris"
+    "github.com/FumingPower3925/celeris/pkg/celeris"
 )
 
 func main() {

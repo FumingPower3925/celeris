@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/albertbausili/celeris/internal/h2/stream"
+	"github.com/FumingPower3925/celeris/internal/h2/stream"
 )
 
 func TestLogger_Middleware(t *testing.T) {

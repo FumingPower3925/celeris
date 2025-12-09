@@ -76,9 +76,9 @@ Celeris HTTP/2 first framework is built in three layers:
 
 ## Community
 
-- [GitHub Repository](https://github.com/albertbausili/celeris)
-- [Issue Tracker](https://github.com/albertbausili/celeris/issues)
-- [Discussions](https://github.com/albertbausili/celeris/discussions)
+- [GitHub Repository](https://github.com/FumingPower3925/celeris)
+- [Issue Tracker](https://github.com/FumingPower3925/celeris/issues)
+- [Discussions](https://github.com/FumingPower3925/celeris/discussions)
 
 ## License
 

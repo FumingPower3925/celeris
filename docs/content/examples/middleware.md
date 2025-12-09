@@ -16,7 +16,7 @@ package main
 
 import (
     "strings"
-    "github.com/albertbausili/celeris/pkg/celeris"
+    "github.com/FumingPower3925/celeris/pkg/celeris"
 )
 
 func JWTAuth(secretKey string) celeris.Middleware {
@@ -87,7 +87,7 @@ package main
 import (
     "sync"
     "time"
-    "github.com/albertbausili/celeris/pkg/celeris"
+    "github.com/FumingPower3925/celeris/pkg/celeris"
 )
 
 type RateLimiter struct {
@@ -191,7 +191,7 @@ Validate request data:
 package main
 
 import (
-    "github.com/albertbausili/celeris/pkg/celeris"
+    "github.com/FumingPower3925/celeris/pkg/celeris"
 )
 
 type Validator interface {
@@ -273,7 +273,7 @@ package main
 import (
     "log/slog"
     "time"
-    "github.com/albertbausili/celeris/pkg/celeris"
+    "github.com/FumingPower3925/celeris/pkg/celeris"
 )
 
 func StructuredLogger(logger *slog.Logger) celeris.Middleware {
@@ -330,7 +330,7 @@ Advanced CORS configuration:
 package main
 
 import (
-    "github.com/albertbausili/celeris/pkg/celeris"
+    "github.com/FumingPower3925/celeris/pkg/celeris"
 )
 
 func CustomCORS() celeris.Middleware {
@@ -380,7 +380,7 @@ package main
 import (
     "context"
     "time"
-    "github.com/albertbausili/celeris/pkg/celeris"
+    "github.com/FumingPower3925/celeris/pkg/celeris"
 )
 
 func TimeoutMiddleware(timeout time.Duration) celeris.Middleware {

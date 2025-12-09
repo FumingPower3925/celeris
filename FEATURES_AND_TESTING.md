@@ -2156,7 +2156,7 @@ fuzz: elapsed: 9s, execs: 733589 (81386/sec), new interesting: 12 (total: 49)
 ...
 fuzz: elapsed: 30s, execs: 2450123 (81670/sec), new interesting: 12 (total: 49)
 PASS
-ok      github.com/albertbausili/celeris/test/fuzzy     30.412s
+ok      github.com/FumingPower3925/celeris/test/fuzzy     30.412s
 ```
 
 **Total Executions:** 7.4M+ across all fuzz tests
@@ -2356,7 +2356,7 @@ Running tests with race detector...
 ==================
 Found 0 data race(s)
 PASS
-ok      github.com/albertbausili/celeris/pkg/celeris    1.401s
+ok      github.com/FumingPower3925/celeris/pkg/celeris    1.401s
 ```
 
 **Zero Races Detected** across:
@@ -2374,12 +2374,12 @@ $ make bench
 Running benchmarks...
 goos: darwin
 goarch: arm64
-pkg: github.com/albertbausili/celeris/pkg/celeris
+pkg: github.com/FumingPower3925/celeris/pkg/celeris
 cpu: Apple M4
 BenchmarkRouter_StaticRoute-10       3548344    368.5 ns/op    737 B/op    10 allocs/op
 BenchmarkRouter_ParameterRoute-10    2171157    538.3 ns/op   1090 B/op    13 allocs/op
 PASS
-ok      github.com/albertbausili/celeris/pkg/celeris    3.748s
+ok      github.com/FumingPower3925/celeris/pkg/celeris    3.748s
 ```
 
 **Performance Impact:** No significant regressions from feature additions.

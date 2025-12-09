@@ -5,7 +5,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	"github.com/albertbausili/celeris/pkg/celeris"
+	"github.com/FumingPower3925/celeris/pkg/celeris"
 )
 
 // FuzzHeaders_SetGet tests header set and get operations with random inputs.

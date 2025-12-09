@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/albertbausili/celeris/internal/h1"
+	"github.com/FumingPower3925/celeris/internal/h1"
 )
 
 // FuzzH1RequestLine fuzzes HTTP/1.1 request line parsing with random inputs.

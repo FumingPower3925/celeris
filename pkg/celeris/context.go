@@ -14,7 +14,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/albertbausili/celeris/internal/h2/stream"
+	"github.com/FumingPower3925/celeris/internal/h2/stream"
 	json "github.com/goccy/go-json"
 )
 

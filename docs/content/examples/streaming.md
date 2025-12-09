@@ -17,7 +17,7 @@ package main
 import (
     "fmt"
     "time"
-    "github.com/albertbausili/celeris/pkg/celeris"
+    "github.com/FumingPower3925/celeris/pkg/celeris"
 )
 
 func sseHandler(ctx *celeris.Context) error {
@@ -53,7 +53,7 @@ package main
 
 import (
     "encoding/json"
-    "github.com/albertbausili/celeris/pkg/celeris"
+    "github.com/FumingPower3925/celeris/pkg/celeris"
 )
 
 type Record struct {
@@ -95,7 +95,7 @@ package main
 import (
     "io"
     "os"
-    "github.com/albertbausili/celeris/pkg/celeris"
+    "github.com/FumingPower3925/celeris/pkg/celeris"
 )
 
 func uploadHandler(ctx *celeris.Context) error {
@@ -159,7 +159,7 @@ package main
 
 import (
     "fmt"
-    "github.com/albertbausili/celeris/pkg/celeris"
+    "github.com/FumingPower3925/celeris/pkg/celeris"
 )
 
 func chunkedHandler(ctx *celeris.Context) error {
@@ -190,7 +190,7 @@ package main
 import (
     "bufio"
     "fmt"
-    "github.com/albertbausili/celeris/pkg/celeris"
+    "github.com/FumingPower3925/celeris/pkg/celeris"
 )
 
 func bidirectionalHandler(ctx *celeris.Context) error {
@@ -228,7 +228,7 @@ import (
     "bufio"
     "os"
     "time"
-    "github.com/albertbausili/celeris/pkg/celeris"
+    "github.com/FumingPower3925/celeris/pkg/celeris"
 )
 
 func logsHandler(ctx *celeris.Context) error {

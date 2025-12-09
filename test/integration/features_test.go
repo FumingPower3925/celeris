@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/albertbausili/celeris/pkg/celeris"
+	"github.com/FumingPower3925/celeris/pkg/celeris"
 )
 
 // TestCompression verifies the compress middleware works when Accept-Encoding is present

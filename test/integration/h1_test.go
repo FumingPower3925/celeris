@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/albertbausili/celeris/pkg/celeris"
+	"github.com/FumingPower3925/celeris/pkg/celeris"
 )
 
 // TestHTTP1BasicRequest tests basic HTTP/1.1 request-response cycle

@@ -6,7 +6,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	"github.com/albertbausili/celeris/pkg/celeris"
+	"github.com/FumingPower3925/celeris/pkg/celeris"
 )
 
 // FuzzContextJSON tests JSON encoding and decoding with random data inputs.

@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/albertbausili/celeris/pkg/celeris"
+	"github.com/FumingPower3925/celeris/pkg/celeris"
 )
 
 // TestConcurrentRequests tests handling multiple concurrent requests

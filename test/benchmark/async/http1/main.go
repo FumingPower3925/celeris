@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/albertbausili/celeris/test/benchmark/internal/client"
-	"github.com/albertbausili/celeris/test/benchmark/internal/server"
+	"github.com/FumingPower3925/celeris/test/benchmark/internal/client"
+	"github.com/FumingPower3925/celeris/test/benchmark/internal/server"
 )
 
 func main() {

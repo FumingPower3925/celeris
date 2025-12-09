@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/albertbausili/celeris/internal/h2/stream"
+	"github.com/FumingPower3925/celeris/internal/h2/stream"
 )
 
 func TestContext_Method(t *testing.T) {

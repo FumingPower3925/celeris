@@ -1,4 +1,4 @@
-module github.com/albertbausili/celeris
+module github.com/FumingPower3925/celeris
 
 go 1.25.2
 

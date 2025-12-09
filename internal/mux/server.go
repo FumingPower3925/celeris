@@ -11,9 +11,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/albertbausili/celeris/internal/h1"
-	"github.com/albertbausili/celeris/internal/h2/stream"
-	h2transport "github.com/albertbausili/celeris/internal/h2/transport"
+	"github.com/FumingPower3925/celeris/internal/h1"
+	"github.com/FumingPower3925/celeris/internal/h2/stream"
+	h2transport "github.com/FumingPower3925/celeris/internal/h2/transport"
 	"github.com/panjf2000/gnet/v2"
 )
 

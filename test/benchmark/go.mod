@@ -1,11 +1,11 @@
-module github.com/albertbausili/celeris/test/benchmark
+module github.com/FumingPower3925/celeris/test/benchmark
 
 go 1.25.2
 
-replace github.com/albertbausili/celeris => ../../
+replace github.com/FumingPower3925/celeris => ../../
 
 require (
-	github.com/albertbausili/celeris v0.0.0
+	github.com/FumingPower3925/celeris v0.0.0
 	github.com/gin-gonic/gin v1.11.0
 	github.com/go-chi/chi/v5 v5.2.3
 	github.com/gofiber/fiber/v2 v2.52.10
