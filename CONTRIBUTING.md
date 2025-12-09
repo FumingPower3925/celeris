@@ -52,7 +52,7 @@ Enhancement suggestions are tracked as GitHub issues. When creating an enhanceme
 
 ### Prerequisites
 
-* Go 1.22 or later
+* Go 1.25.2 or later
 * golangci-lint
 * Hugo (for documentation)
 * h2load (for load testing)
@@ -85,13 +85,13 @@ make lint
 make test
 
 # Run with coverage
-make coverage
+make test-coverage
 
 # Run benchmarks
-make bench
+make test-bench
 
 # Run load tests
-make load-test
+make test-load
 
 # Run HTTP/2 compliance tests
 make h2spec
@@ -143,11 +143,13 @@ Fixes #123
 ```
 celeris/
 ├── cmd/                    # Example applications
+├── examples/              # Feature examples
 ├── pkg/celeris/           # Public API
 ├── internal/              # Internal implementation
-│   ├── transport/         # gnet integration
-│   ├── frame/             # HTTP/2 frames
-│   └── stream/            # Stream management
+│   ├── mux/               # Protocol multiplexing
+│   ├── h1/                # HTTP/1.1 implementation
+│   └── h2/                # HTTP/2 implementation
+├── test/                  # Integration and benchmark tests
 ├── docs/                  # Documentation
 └── .github/workflows/     # CI/CD
 ```
