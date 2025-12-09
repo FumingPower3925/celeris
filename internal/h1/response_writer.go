@@ -172,13 +172,33 @@ func (w *ResponseWriter) WriteResponse(status int, headers [][2]string, body []b
 
 		// Prefer zero-copy body as separate iovec, but coalesce small bodies into header buffer when it fits
 		if len(body) > 0 {
-			// If small body and capacity allows, append to header buffer to reduce iovec count
-			if wantCoalesceBody && cap(buf)-len(buf) >= len(body) {
-				buf = append(buf, body...)
-				w.pending = append(w.pending, buf)
+			if w.chunkedMode {
+				// We need to frame the initial body as a chunk
+				// Append chunk size
+				buf = strconv.AppendInt(buf, int64(len(body)), 16)
+				buf = append(buf, crlf...)
+
+				// Append body
+				if wantCoalesceBody && cap(buf)-len(buf) >= len(body)+2 {
+					buf = append(buf, body...)
+					buf = append(buf, crlf...)
+					w.pending = append(w.pending, buf)
+				} else {
+					// Body too large or doesn't fit, send separate
+					w.pending = append(w.pending, buf)
+					w.pending = append(w.pending, body)
+					w.pending = append(w.pending, crlf)
+				}
 			} else {
-				w.pending = append(w.pending, buf)
-				w.pending = append(w.pending, body)
+				// Standard Content-Length or no body framing
+				// If small body and capacity allows, append to header buffer to reduce iovec count
+				if wantCoalesceBody && cap(buf)-len(buf) >= len(body) {
+					buf = append(buf, body...)
+					w.pending = append(w.pending, buf)
+				} else {
+					w.pending = append(w.pending, buf)
+					w.pending = append(w.pending, body)
+				}
 			}
 		} else {
 			w.pending = append(w.pending, buf)
@@ -244,19 +264,6 @@ func (w *ResponseWriter) writeBody(body []byte) {
 
 // flush sends all pending data using AsyncWritev.
 func (w *ResponseWriter) flush() error {
-	if w.inflight {
-		// Queue additional data to be sent after current inflight completes
-		if len(w.pending) > 0 {
-			w.queued = append(w.queued, w.pending...)
-			w.pending = nil
-			if len(w.releases) > 0 {
-				w.queuedReleases = append(w.queuedReleases, w.releases...)
-				w.releases = nil
-			}
-		}
-		return nil
-	}
-
 	// If there is coalesced data not yet moved to pending, move it now
 	if len(w.coalesceBuf) > 0 {
 		// Hand off remaining coalesced data without copying
@@ -270,6 +277,19 @@ func (w *ResponseWriter) flush() error {
 		pooled := responseBufferPool.Get().(*[]byte)
 		w.coalescePooled = pooled
 		w.coalesceBuf = (*pooled)[:0]
+	}
+
+	if w.inflight {
+		// Queue additional data to be sent after current inflight completes
+		if len(w.pending) > 0 {
+			w.queued = append(w.queued, w.pending...)
+			w.pending = nil
+			if len(w.releases) > 0 {
+				w.queuedReleases = append(w.queuedReleases, w.releases...)
+				w.releases = nil
+			}
+		}
+		return nil
 	}
 
 	batch := w.pending

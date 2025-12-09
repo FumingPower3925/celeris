@@ -70,22 +70,22 @@ test-rampup: test-rampup-h1 test-rampup-h2
 # Run HTTP/1.1 ramp-up benchmarks (all frameworks)
 test-rampup-h1:
 	@echo "Running HTTP/1.1 ramp-up benchmarks (all frameworks)..."
-	@cd test/benchmark/http1 && go build -tags "poll_opt gc_opt" -o bench-rampup-h1 . && ./bench-rampup-h1
+	@cd test/benchmark/async/http1 && go build -tags "poll_opt gc_opt" -o bench-rampup-h1 . && ./bench-rampup-h1
 
 # Run HTTP/1.1 ramp-up benchmarks (Celeris only)
 test-rampup-h1-celeris:
 	@echo "Running HTTP/1.1 ramp-up benchmarks (Celeris only)..."
-	@cd test/benchmark/http1 && go build -tags "poll_opt gc_opt" -o bench-rampup-h1 . && FRAMEWORK=celeris ./bench-rampup-h1
+	@cd test/benchmark/async/http1 && go build -tags "poll_opt gc_opt" -o bench-rampup-h1 . && FRAMEWORK=celeris ./bench-rampup-h1
 
 # Run HTTP/2 ramp-up benchmarks (all frameworks)
 test-rampup-h2:
 	@echo "Running HTTP/2 ramp-up benchmarks (all frameworks)..."
-	@cd test/benchmark/http2 && go build -tags "poll_opt gc_opt" -o bench-rampup-h2 . && ./bench-rampup-h2
+	@cd test/benchmark/async/http2 && go build -tags "poll_opt gc_opt" -o bench-rampup-h2 . && ./bench-rampup-h2
 
 # Run HTTP/2 ramp-up benchmarks (Celeris only)
 test-rampup-h2-celeris:
 	@echo "Running HTTP/2 ramp-up benchmarks (Celeris only)..."
-	@cd test/benchmark/http2 && go build -tags "poll_opt gc_opt" -o bench-rampup-h2 . && FRAMEWORK=celeris ./bench-rampup-h2
+	@cd test/benchmark/async/http2 && go build -tags "poll_opt gc_opt" -o bench-rampup-h2 . && FRAMEWORK=celeris ./bench-rampup-h2
 
 # Run fuzz tests (30s each)
 test-fuzz:
@@ -194,8 +194,8 @@ clean:
 	@rm -f main test-server celeris-test
 	@rm -f cmd/test-server/test-server
 	@rm -f cmd/example/example
-	@rm -f test/benchmark/http1/bench-rampup-h1
-	@rm -f test/benchmark/http2/bench-rampup-h2
+	@rm -f test/benchmark/async/http1/bench-rampup-h1
+	@rm -f test/benchmark/async/http2/bench-rampup-h2
 	@rm -f test/load/load-test
 	@find . -type f -executable -not -path "./.git/*" -not -path "./docs/themes/*" -not -path "./node_modules/*" -not -name "*.go" -not -name "*.md" -not -name "*.sh" -not -name "Makefile" -not -name "*.toml" -not -name "*.yaml" -not -name "*.json" -not -name "*.yml" -not -name "*.scss" -not -name "*.css" -not -name "*.js" -not -name "*.html" -not -name "*.ttf" -not -name "*.woff" -not -name "*.woff2" -not -name "*.png" -not -name "*.svg" -not -name "*.cast" -not -name "*.csv" -not -name "*.out" -not -name "*.pid" -not -name "go" -not -name "git" -not -name "hugo" -not -name "golangci-lint" -not -name "h2spec" -not -name "snyk" -not -name "sonar-scanner" -delete 2>/dev/null || true
 	@rm -f coverage.out coverage.html
