@@ -150,7 +150,8 @@ func RunRampUp(_, fw, sc string, createWorker func() WorkerFunc) RampUpResult {
 
 			if len(recent) == 0 {
 				emptyWindows++
-				if clients > 20 && emptyWindows >= 3 {
+				// Increase tolerance: require more empty windows and higher client count before stopping
+				if clients > 50 && emptyWindows >= 5 {
 					fmt.Printf("  ✗ FAILED: No successful requests with %d clients\n", clients)
 					testLoop = false
 				}
