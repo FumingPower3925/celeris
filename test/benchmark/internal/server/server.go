@@ -337,6 +337,8 @@ func startCeleris(addr string, scenario, mode string) *Handle {
 	default:
 		cfg.EnableH1 = true
 		cfg.EnableH2 = false
+		cfg.Multicore = true
+		cfg.ReusePort = true
 	}
 
 	srv := celeris.New(cfg)

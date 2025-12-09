@@ -103,7 +103,7 @@ func (w *ResponseWriter) WriteResponse(status int, headers [][2]string, body []b
 
 		// Estimate final size to minimize reallocations
 		// Status line: ~ 17-40 bytes, CRLF: 2, connection header ~ (len + value)
-		const smallBodyMax = 16384
+		const smallBodyMax = 32768 // 32KB - coalesce more small bodies to reduce syscalls
 		wantCoalesceBody := len(body) > 0 && len(body) <= smallBodyMax
 		// Base overhead: Status(avg 25) + Date(37) + Connection(clos~20) + CRLF(2)
 		expected := 25 + 37 + 22 + 2
