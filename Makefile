@@ -217,12 +217,10 @@ clean:
 	@rm -f test/benchmark/async/http2/bench-rampup-h2
 	@rm -f test/load/load-test
 	@find . -type f -executable -not -path "./.git/*" -not -path "./docs/themes/*" -not -path "./node_modules/*" -not -name "*.go" -not -name "*.md" -not -name "*.sh" -not -name "Makefile" -not -name "*.toml" -not -name "*.yaml" -not -name "*.json" -not -name "*.yml" -not -name "*.scss" -not -name "*.css" -not -name "*.js" -not -name "*.html" -not -name "*.ttf" -not -name "*.woff" -not -name "*.woff2" -not -name "*.png" -not -name "*.svg" -not -name "*.cast" -not -name "*.csv" -not -name "*.out" -not -name "*.pid" -not -name "go" -not -name "git" -not -name "hugo" -not -name "golangci-lint" -not -name "h2spec" -not -name "snyk" -not -name "sonar-scanner" -delete 2>/dev/null || true
-	@rm -f coverage.out coverage.html
-	@rm -rf .sonar/
-	@rm -f .server.pid
 	@echo "Removing profiling and result files..."
-	@rm -f *.pprof
-	@rm -f *.csv
+	@find . -type f -name "*.pprof" -delete
+	@find . -type f -name "*.csv" -not -path "./.git/*" -delete
+	@find . -type f -name ".!*" -delete
 	@rm -f rampup_results.json
 	@rm -f rampup_results.md
 	@find test -type f -name "*_results.json" -delete 2>/dev/null || true
