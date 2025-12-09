@@ -109,10 +109,13 @@ type Config struct {
     IdleTimeout          time.Duration
     MaxHeaderBytes       int
     MaxConcurrentStreams uint32
+    MaxConnections       uint32
     MaxFrameSize         uint32
     InitialWindowSize    uint32
     Logger               *log.Logger
     DisableKeepAlive     bool
+    EnableH1             bool
+    EnableH2             bool
 }
 ```
 
@@ -122,15 +125,18 @@ type Config struct {
 - **Multicore** (`bool`): Enable multi-core support (default: true)
 - **NumEventLoop** (`int`): Number of event loops (0 = auto-detect)
 - **ReusePort** (`bool`): Enable SO_REUSEPORT (default: true)
-- **ReadTimeout** (`time.Duration`): Maximum duration for reading requests
-- **WriteTimeout** (`time.Duration`): Maximum duration for writing responses
-- **IdleTimeout** (`time.Duration`): Maximum idle time
-- **MaxHeaderBytes** (`int`): Maximum header size
-- **MaxConcurrentStreams** (`uint32`): Max concurrent HTTP/2 streams
-- **MaxFrameSize** (`uint32`): Maximum HTTP/2 frame size
-- **InitialWindowSize** (`uint32`): Initial flow control window
+- **ReadTimeout** (`time.Duration`): Max duration for reading requests
+- **WriteTimeout** (`time.Duration`): Max duration for writing responses
+- **IdleTimeout** (`time.Duration`): Max idle time
+- **MaxHeaderBytes** (`int`): Max header size (default: 16MB)
+- **MaxConcurrentStreams** (`uint32`): Max concurrent HTTP/2 streams (default: adaptive, min 20000)
+- **MaxConnections** (`uint32`): Max concurrent connections (default: adaptive, min 100000)
+- **MaxFrameSize** (`uint32`): Max HTTP/2 frame size (default: 256KB)
+- **InitialWindowSize** (`uint32`): Initial flow control window (default: 1MB)
 - **Logger** (`*log.Logger`): Logger instance
 - **DisableKeepAlive** (`bool`): Disable keep-alive connections
+- **EnableH1** (`bool`): Enable HTTP/1.1 support (default: true)
+- **EnableH2** (`bool`): Enable HTTP/2 support (default: true)
 
 ### DefaultConfig
 
@@ -138,14 +144,17 @@ type Config struct {
 func DefaultConfig() Config
 ```
 
-Returns a configuration with sensible defaults:
+Returns a configuration with high-performance defaults optimized for throughput:
 
 - Addr: ":8080"
 - Multicore: true
 - ReusePort: true
-- MaxConcurrentStreams: 100
-- MaxFrameSize: 16384
-- InitialWindowSize: 65535
+- MaxConcurrentStreams: Adaptive (e.g., 20,000+)
+- MaxFrameSize: 262,144 (256KB)
+- InitialWindowSize: 1,048,576 (1MB)
+- Read/Write Timeout: 300s
+- EnableH1: true
+- EnableH2: true
 
 ## Examples
 

@@ -239,6 +239,27 @@ func MustParam(ctx *Context, name string) string
 
 Retrieves a route parameter or panics if not found.
 
+## Static Files
+
+### Static
+
+```go
+func (r *Router) Static(prefix, root string)
+```
+
+Registers a route to serve static files from a directory.
+
+**Parameters:**
+- `prefix`: URL path prefix (e.g., "/assets")
+- `root`: Local directory path (e.g., "./public")
+
+**Example:**
+
+```go
+router.Static("/assets", "./public")
+// Serves ./public/style.css at /assets/style.css
+```
+
 ## Examples
 
 ### Basic Routing

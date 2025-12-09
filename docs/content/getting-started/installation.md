@@ -10,9 +10,9 @@ weight: 1
 - Go 1.25.2 or later
 - Linux, macOS, or Windows
 
-## Install Celeris
+## Install Celeris HTTP/2 first framework
 
-To install Celeris, use `go get`:
+To install Celeris HTTP/2 first framework, use `go get`:
 
 ```bash
 go get -u github.com/FumingPower3925/celeris
@@ -33,7 +33,7 @@ import (
 func main() {
     router := celeris.NewRouter()
     router.GET("/", func(ctx *celeris.Context) error {
-        return ctx.String(200, "Celeris is installed!")
+        return ctx.String(200, "Celeris HTTP/2 first framework is installed!")
     })
     
     server := celeris.NewWithDefaults()

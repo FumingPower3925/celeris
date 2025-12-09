@@ -358,22 +358,73 @@ func RateLimitMiddleware(limit int, window time.Duration) celeris.Middleware {
 router.Use(RateLimitMiddleware(100, time.Minute))
 ```
 
-### Compression Middleware (Placeholder)
+### Compression Middleware
 
 ```go
-func CompressionMiddleware(next celeris.Handler) celeris.Handler {
-    return celeris.HandlerFunc(func(ctx *celeris.Context) error {
-        // Check if client accepts compression
-        acceptEncoding := ctx.Header().Get("accept-encoding")
-        
-        // Process request
-        err := next.ServeHTTP2(ctx)
-        
-        // TODO: Compress response if supported
-        _ = acceptEncoding
-        
-        return err
-    })
-}
+func Compress() Middleware
+func CompressWithConfig(config CompressConfig) Middleware
 ```
+
+Compresses response bodies with gzip or brotli.
+
+**Example:**
+
+```go
+router.Use(celeris.Compress())
+
+// Or with custom config:
+router.Use(celeris.CompressWithConfig(celeris.CompressConfig{
+    Level:   6,          // Compression level (1-9 for gzip, 0-11 for brotli)
+    MinSize: 1024,       // Minimum response size to compress
+    ExcludedTypes: []string{"image/", "video/"},
+}))
+```
+
+### Health Check Middleware
+
+```go
+func Health() Middleware
+func HealthWithConfig(config HealthConfig) Middleware
+```
+
+Sets up a health check endpoint (default: `/health`).
+
+**Example:**
+
+```go
+router.Use(celeris.Health())
+```
+
+### Rate Limiter Middleware
+
+```go
+func RateLimiter(requestsPerSecond int) Middleware
+func RateLimiterWithConfig(config RateLimiterConfig) Middleware
+```
+
+Limits requests per second using a token bucket algorithm.
+
+**Example:**
+
+```go
+// 100 requests per second
+router.Use(celeris.RateLimiter(100))
+```
+
+### Auto-Documentation Middleware
+
+```go
+func Docs() Middleware
+func DocsWithRouter(router *Router) Middleware
+func DocsWithConfig(config DocsConfig) Middleware
+```
+
+Serves Swagger-style API documentation at `/docs`.
+
+**Example:**
+
+```go
+router.Use(celeris.DocsWithRouter(router))
+```
+
 

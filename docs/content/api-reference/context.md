@@ -5,7 +5,7 @@ weight: 3
 
 # Context API
 
-The `Context` provides request/response handling for HTTP/2 requests.
+The `Context` provides request/response handling for HTTP/2 (Celeris HTTP/2 first framework) requests.
 
 ## Request Methods
 
@@ -200,12 +200,82 @@ func (c *Context) Set(key string, value interface{})
 Stores a value in the context (useful for middleware).
 
 ### Get
-
 ```go
 func (c *Context) Get(key string) (interface{}, bool)
 ```
 
 Retrieves a value from the context.
+
+## URL Parameters
+
+### Query
+
+```go
+func (c *Context) Query(key string) string
+```
+
+Retrieves a query parameter by key used in the URL (?key=value).
+
+## Request Info
+
+### Scheme
+
+```go
+func (c *Context) Scheme() string
+```
+
+Returns the request scheme (http/https).
+
+### Authority
+
+```go
+func (c *Context) Authority() string
+```
+
+Returns the request authority (host).
+
+## Advanced Response
+
+### Plain
+
+```go
+func (c *Context) Plain(status int, s string) error
+```
+
+Writes a plain text response without formatting overhead (faster than String).
+
+### Flush
+
+```go
+func (c *Context) Flush() error
+```
+
+Flushes the current response buffer to the client.
+
+### Stream
+
+```go
+func (c *Context) Stream(fn func(w io.Writer) error) error
+```
+
+Streams data to the client using a writer.
+
+### SSE
+
+```go
+func (c *Context) SSE(event SSEEvent) error
+```
+
+Sends a Server-Sent Event (SSE).
+
+```go
+type SSEEvent struct {
+    ID    string
+    Event string
+    Data  string
+    Retry int
+}
+```
 
 ### MustGet
 

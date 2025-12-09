@@ -5,7 +5,7 @@ weight: 2
 
 # Quick Start
 
-This guide will help you create your first Celeris server in minutes.
+This guide will help you create your first Celeris HTTP/2 first framework server in minutes.
 
 ## Basic Server
 

@@ -5,17 +5,17 @@ weight: 3
 
 # Core Concepts
 
-Understanding these core concepts will help you use Celeris effectively.
+Understanding these core concepts will help you use Celeris HTTP/2 first framework effectively.
 
 ## HTTP/2 Cleartext (h2c)
 
-Celeris uses HTTP/2 without TLS (cleartext), also known as h2c. This provides:
+Celeris HTTP/2 first framework uses HTTP/2 without TLS (cleartext), also known as h2c. This provides:
 
 - **Performance**: All HTTP/2 benefits without TLS overhead
 - **Simplicity**: No certificate management
 - **Use Case**: Internal services, behind reverse proxies
 
-**Note**: For production internet-facing services, use a reverse proxy (nginx, Envoy) with TLS in front of Celeris.
+**Note**: For production internet-facing services, use a reverse proxy (nginx, Envoy) with TLS in front of Celeris HTTP/2 first framework.
 
 ## Server
 
@@ -120,7 +120,7 @@ HTTP/2 uses streams for multiplexing:
 - Bidirectional communication
 - Flow control per stream
 
-Celeris handles this automatically. You just write handlers as if they're regular HTTP requests.
+Celeris HTTP/2 first framework handles this automatically. You just write handlers as if they're regular HTTP requests.
 
 ## Flow Control
 
@@ -130,7 +130,7 @@ HTTP/2 flow control prevents overwhelming receivers:
 - Per-stream and connection-level
 - Automatic WINDOW_UPDATE frames
 
-Celeris manages flow control internally, but you can observe it in logs.
+Celeris HTTP/2 first framework manages flow control internally, but you can observe it in logs.
 
 ## Performance Tips
 
@@ -141,7 +141,7 @@ Celeris manages flow control internally, but you can observe it in logs.
 
 ## Architecture
 
-Celeris has three layers:
+Celeris HTTP/2 first framework has three layers:
 
 1. **Transport** (`internal/transport`)
    - gnet event loop
