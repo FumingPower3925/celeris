@@ -220,6 +220,12 @@ clean:
 	@rm -f coverage.out coverage.html
 	@rm -rf .sonar/
 	@rm -f .server.pid
+	@echo "Removing profiling and result files..."
+	@rm -f *.pprof
+	@rm -f *.csv
+	@rm -f rampup_results.json
+	@rm -f rampup_results.md
+	@find test -type f -name "*_results.json" -delete 2>/dev/null || true
 	@rm -rf docs/public/
 	@echo "Clean complete"
 
