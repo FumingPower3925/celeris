@@ -117,17 +117,36 @@ lint:
 	@cd test/fuzzy && golangci-lint run
 	@echo "Running golangci-lint on test/integration..."
 	@cd test/integration && golangci-lint run
-	@echo "Running golangci-lint on test/load..."
+	echo "Running golangci-lint on test/load..."
 	@cd test/load && golangci-lint run
+	@$(MAKE) lint-examples
+
+# Lint examples specifically
+lint-examples:
 	@echo "Running golangci-lint on examples..."
+	@echo "Linting examples/health-check/..." && (cd examples/health-check && golangci-lint run) && \
+		echo "Linting examples/logger/..." && (cd examples/logger && golangci-lint run) && \
+		echo "Linting examples/rate-limiting/..." && (cd examples/rate-limiting && golangci-lint run) && \
+		echo "Linting examples/recovery/..." && (cd examples/recovery && golangci-lint run) && \
+		echo "Linting examples/request-id/..." && (cd examples/request-id && golangci-lint run) && \
+		echo "Linting examples/server-push/..." && (cd examples/server-push && golangci-lint run) && \
+		echo "Linting examples/streaming/..." && (cd examples/streaming && golangci-lint run) && \
+		echo "Linting examples/http1-only/..." && (cd examples/http1-only && golangci-lint run) && \
+		echo "Linting examples/http2-only/..." && (cd examples/http2-only && golangci-lint run) && \
+		echo "Linting examples/basic-routing/..." && (cd examples/basic-routing && golangci-lint run) && \
+		echo "Linting examples/compression/..." && (cd examples/compression && golangci-lint run) && \
+		echo "All example linting completed successfully!"
+
+# Test examples by building them
+test-examples:
+	@echo "Verifying examples build..."
 	@for dir in examples/*/; do \
 		if [ -f "$$dir/main.go" ]; then \
-			echo "Linting $$dir..."; \
-			cd "$$dir" && golangci-lint run . || true; \
-			cd ../..; \
+			echo "Building $$dir..."; \
+			(cd "$$dir" && go build -o /dev/null main.go) || exit 1; \
 		fi; \
 	done
-	@echo "All linting completed successfully!"
+	@echo "All examples built successfully!"
 
 # Build documentation
 docs:
