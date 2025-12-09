@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/albertbausili/celeris/internal/date"
 	"github.com/albertbausili/celeris/internal/h1"
 	"github.com/albertbausili/celeris/internal/h2/stream"
 	h2transport "github.com/albertbausili/celeris/internal/h2/transport"
@@ -18,9 +19,10 @@ type Server struct {
 		Start() error
 		Stop(context.Context) error
 	}
-	h1Server  *h1.Server
-	h2Server  *h2transport.Server
-	muxServer *mux.Server
+	h1Server       *h1.Server
+	h2Server       *h2transport.Server
+	muxServer      *mux.Server
+	stopDateTicker func()
 }
 
 // New creates a new Server with the provided configuration.
@@ -56,6 +58,9 @@ func (s *Server) Start() error {
 	if s.handler == nil {
 		return fmt.Errorf("handler not set")
 	}
+
+	// Start date ticker for optimized Date header generation
+	s.stopDateTicker = date.StartTicker()
 
 	streamHandler := &streamHandlerAdapter{
 		handler: s.handler,
@@ -108,6 +113,10 @@ func (s *Server) Start() error {
 
 // Stop gracefully shuts down the server without interrupting active connections.
 func (s *Server) Stop(ctx context.Context) error {
+	if s.stopDateTicker != nil {
+		s.stopDateTicker()
+		s.stopDateTicker = nil
+	}
 	if s.transport != nil {
 		return s.transport.Stop(ctx)
 	}

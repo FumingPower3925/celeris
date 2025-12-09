@@ -1,3 +1,4 @@
+// Package client provides HTTP client utilities for benchmarking.
 package client
 
 import (
@@ -24,6 +25,7 @@ type RoundRobinTransport struct {
 	idx        uint64
 }
 
+// RoundTrip executes a single HTTP transaction.
 func (r *RoundRobinTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if len(r.Transports) == 0 {
 		return http.DefaultTransport.RoundTrip(req)
@@ -33,6 +35,7 @@ func (r *RoundRobinTransport) RoundTrip(req *http.Request) (*http.Response, erro
 	return t.RoundTrip(req)
 }
 
+// RampUpResult holds the results of a single ramp-up step.
 type RampUpResult struct {
 	Framework     string  `json:"framework"`
 	Scenario      string  `json:"scenario"`
@@ -42,6 +45,7 @@ type RampUpResult struct {
 	TimeToDegrade float64 `json:"time_to_degrade_s"`
 }
 
+// Measurement capture latency stats.
 type Measurement struct {
 	Timestamp time.Time
 	LatencyNs float64
@@ -49,19 +53,25 @@ type Measurement struct {
 }
 
 const (
-	RampUpInterval    = 25 * time.Millisecond
-	MeasureWindow     = 1 * time.Second
+	// RampUpInterval is the duration between ramp-up steps.
+	RampUpInterval = 25 * time.Millisecond
+	// MeasureWindow is the duration for measuring stats.
+	MeasureWindow = 1 * time.Second
+	// DegradationThresh is the latency degradation threshold.
 	DegradationThresh = 100.0 // ms
-	TimeoutThresh     = 3 * time.Second
-	MaxTestDuration   = 30 * time.Second
-	RequestDelay      = 0 * time.Millisecond
+	// TimeoutThresh is the timeout threshold.
+	TimeoutThresh = 3 * time.Second
+	// MaxTestDuration is the maximum duration of a test.
+	MaxTestDuration = 30 * time.Second
+	// RequestDelay is the delay between requests.
+	RequestDelay = 0 * time.Millisecond
 )
 
 // WorkerFunc is the function that simulates a single client.
 type WorkerFunc func(stopCh <-chan struct{}, measurements chan<- Measurement, wg *sync.WaitGroup)
 
 // RunRampUp performs the ramp-up test using the provided worker factory.
-func RunRampUp(url, fw, sc string, createWorker func() WorkerFunc) RampUpResult {
+func RunRampUp(_, fw, sc string, createWorker func() WorkerFunc) RampUpResult {
 	var mu sync.Mutex
 	var measurements []Measurement
 	var activeClients int32
@@ -198,6 +208,7 @@ func RunRampUp(url, fw, sc string, createWorker func() WorkerFunc) RampUpResult 
 	}
 }
 
+// Percentile calculates the p-th percentile of vals.
 func Percentile(vals []float64, p float64) float64 {
 	if len(vals) == 0 {
 		return math.NaN()
@@ -213,6 +224,7 @@ func Percentile(vals []float64, p float64) float64 {
 	return vals[idx]
 }
 
+// PrintResults prints benchmark results to stdout.
 func PrintResults(results []RampUpResult, title string) {
 	fmt.Printf("\n\n=== %s RESULTS ===\n\n", title)
 	m := make(map[string][]RampUpResult)
@@ -242,6 +254,7 @@ func PrintResults(results []RampUpResult, title string) {
 	}
 }
 
+// SaveResults saves benchmark results to a file.
 func SaveResults(results []RampUpResult, name string) {
 	f, _ := os.Create(name + "_results.json")
 	defer f.Close()

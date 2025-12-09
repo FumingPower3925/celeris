@@ -1,3 +1,4 @@
+// Package main benchmarks asynchronous hybrid HTTP.
 package main
 
 import (
@@ -52,9 +53,10 @@ func main() {
 			}
 
 			path := "/bench"
-			if sc == "json" {
+			switch sc {
+			case "json":
 				path = "/json"
-			} else if sc == "params" {
+			case "params":
 				path = "/users/123/posts/456"
 			}
 

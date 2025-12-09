@@ -1,3 +1,4 @@
+// Package server provides server implementations for benchmarking.
 package server
 
 import (
@@ -83,7 +84,7 @@ func startNetHTTP(addr string, scenario, mode string) *Handle {
 			_, _ = w.Write([]byte("{\"status\":\"ok\",\"code\":200}"))
 		})
 	case "params":
-		mux.HandleFunc("/users/", func(w http.ResponseWriter, r *http.Request) {
+		mux.HandleFunc("/users/", func(w http.ResponseWriter, _ *http.Request) {
 			// Basic parsing for standard net/http
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte("{\"user_id\":\"123\",\"post_id\":\"456\"}"))
@@ -242,7 +243,7 @@ func startIris(addr string, scenario, mode string) *Handle {
 	return &Handle{Addr: addr, Stop: func(ctx context.Context) error { return srv.Shutdown(ctx) }}
 }
 
-func startFiber(addr string, scenario, mode string) *Handle {
+func startFiber(addr string, scenario, _ string) *Handle {
 	app := fiber.New(fiber.Config{
 		DisableStartupMessage: true,
 	})
@@ -277,7 +278,7 @@ func startFiber(addr string, scenario, mode string) *Handle {
 
 	return &Handle{
 		Addr: addr,
-		Stop: func(ctx context.Context) error {
+		Stop: func(_ context.Context) error {
 			return app.Shutdown()
 		},
 	}
@@ -321,23 +322,21 @@ func startCeleris(addr string, scenario, mode string) *Handle {
 	cfg.Logger = log.New(io.Discard, "", 0)
 	cfg.Addr = addr
 
-	if mode == "http2" {
+	switch mode {
+	case "http2":
 		cfg.EnableH1 = false
 		cfg.EnableH2 = true
 		cfg.MaxConcurrentStreams = 2000
-	} else if mode == "hybrid" {
+	case "hybrid":
 		cfg.EnableH1 = true
 		cfg.EnableH2 = true
 		cfg.MaxConcurrentStreams = 2000
 		// H1 specific config
-		// H1 specific config
 		cfg.Multicore = true
 		cfg.ReusePort = true
-	} else {
+	default:
 		cfg.EnableH1 = true
 		cfg.EnableH2 = false
-		cfg.Multicore = true
-		cfg.ReusePort = true
 	}
 
 	srv := celeris.New(cfg)

@@ -1,3 +1,4 @@
+// Package main benchmarks asynchronous HTTP/2.
 package main
 
 import (
@@ -78,9 +79,10 @@ func main() {
 
 			// Determine URL path
 			path := "/bench"
-			if sc == "json" {
+			switch sc {
+			case "json":
 				path = "/json"
-			} else if sc == "params" {
+			case "params":
 				path = "/users/123/posts/456"
 			}
 			url := "http://" + srvHandle.Addr + path

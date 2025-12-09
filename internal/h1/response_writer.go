@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"sync"
 
+	"github.com/albertbausili/celeris/internal/date"
 	"github.com/panjf2000/gnet/v2"
 )
 
@@ -25,6 +26,7 @@ var (
 	statusLine502 = []byte("HTTP/1.1 502 Bad Gateway\r\n")
 	statusLine503 = []byte("HTTP/1.1 503 Service Unavailable\r\n")
 
+	headerDate          = []byte("date: ")
 	headerContentLength = []byte("content-length: ")
 	headerConnection    = []byte("connection: ")
 	headerClose         = []byte("close\r\n")
@@ -103,7 +105,8 @@ func (w *ResponseWriter) WriteResponse(status int, headers [][2]string, body []b
 		// Status line: ~ 17-40 bytes, CRLF: 2, connection header ~ (len + value)
 		const smallBodyMax = 16384
 		wantCoalesceBody := len(body) > 0 && len(body) <= smallBodyMax
-		expected := 32 + 2 + 2
+		// Base overhead: Status(avg 25) + Date(37) + Connection(clos~20) + CRLF(2)
+		expected := 25 + 37 + 22 + 2
 		// Headers length + CRLF per header
 		for _, h := range headers {
 			expected += len(h[0]) + 2 + len(h[1]) + 2
@@ -125,40 +128,12 @@ func (w *ResponseWriter) WriteResponse(status int, headers [][2]string, body []b
 		}
 
 		// Status line (fast-path for common status codes using pre-built bytes)
-		switch status {
-		case 200:
-			buf = append(buf, statusLine200...)
-		case 201:
-			buf = append(buf, statusLine201...)
-		case 204:
-			buf = append(buf, statusLine204...)
-		case 301:
-			buf = append(buf, statusLine301...)
-		case 302:
-			buf = append(buf, statusLine302...)
-		case 304:
-			buf = append(buf, statusLine304...)
-		case 400:
-			buf = append(buf, statusLine400...)
-		case 401:
-			buf = append(buf, statusLine401...)
-		case 403:
-			buf = append(buf, statusLine403...)
-		case 404:
-			buf = append(buf, statusLine404...)
-		case 500:
-			buf = append(buf, statusLine500...)
-		case 502:
-			buf = append(buf, statusLine502...)
-		case 503:
-			buf = append(buf, statusLine503...)
-		default:
-			buf = append(buf, "HTTP/1.1 "...)
-			buf = strconv.AppendInt(buf, int64(status), 10)
-			buf = append(buf, ' ')
-			buf = append(buf, statusText(status)...)
-			buf = append(buf, crlf...)
-		}
+		buf = appendStatusLine(buf, status)
+
+		// Add Date header (zero-copy from atomic cache)
+		buf = append(buf, headerDate...)
+		buf = append(buf, date.Current()...)
+		buf = append(buf, crlf...)
 
 		// Determine content-length upfront
 		hasContentLength := false
@@ -439,5 +414,43 @@ func statusText(code int) string {
 		return "Gateway Timeout"
 	default:
 		return "Unknown"
+	}
+}
+
+// appendStatusLine appends the HTTP status line to the buffer.
+func appendStatusLine(buf []byte, status int) []byte {
+	switch status {
+	case 200:
+		return append(buf, statusLine200...)
+	case 201:
+		return append(buf, statusLine201...)
+	case 204:
+		return append(buf, statusLine204...)
+	case 301:
+		return append(buf, statusLine301...)
+	case 302:
+		return append(buf, statusLine302...)
+	case 304:
+		return append(buf, statusLine304...)
+	case 400:
+		return append(buf, statusLine400...)
+	case 401:
+		return append(buf, statusLine401...)
+	case 403:
+		return append(buf, statusLine403...)
+	case 404:
+		return append(buf, statusLine404...)
+	case 500:
+		return append(buf, statusLine500...)
+	case 502:
+		return append(buf, statusLine502...)
+	case 503:
+		return append(buf, statusLine503...)
+	default:
+		buf = append(buf, "HTTP/1.1 "...)
+		buf = strconv.AppendInt(buf, int64(status), 10)
+		buf = append(buf, ' ')
+		buf = append(buf, statusText(status)...)
+		return append(buf, crlf...)
 	}
 }

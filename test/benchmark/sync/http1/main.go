@@ -1,3 +1,4 @@
+// Package main benchmarks synchronous HTTP/1.1.
 package main
 
 import (
@@ -46,11 +47,12 @@ func main() {
 				continue
 			}
 
-			// Determine URL path
+			// Determine URL path and Host
 			path := "/bench"
-			if sc == "json" {
+			switch sc {
+			case "json":
 				path = "/json"
-			} else if sc == "params" {
+			case "params":
 				path = "/users/123/posts/456"
 			}
 			url := "http://" + srvHandle.Addr + path
