@@ -7,10 +7,11 @@ import (
 
 // Router implements HTTP request routing with support for parameters, middleware, and groups.
 type Router struct {
-	routes       map[string]*routeNode
-	middlewares  []Middleware
-	notFound     Handler
-	errorHandler ErrorHandler
+	routes                  map[string]*routeNode
+	middlewares             []Middleware
+	cachedMiddlewareWrapper func(Handler) Handler // Cached chain builder
+	notFound                Handler
+	errorHandler            ErrorHandler
 }
 
 // ErrorHandler defines a function type for handling errors returned by HTTP handlers.
@@ -95,6 +96,10 @@ func (e *HTTPError) WithDetails(details interface{}) *HTTPError {
 // Use adds one or more middleware functions to the router's middleware stack.
 func (r *Router) Use(middlewares ...Middleware) {
 	r.middlewares = append(r.middlewares, middlewares...)
+	// Rebuild cached wrapper
+	if len(r.middlewares) > 0 {
+		r.cachedMiddlewareWrapper = Chain(r.middlewares...)
+	}
 }
 
 // NotFound sets the handler that will be called for routes that do not match any registered path.
@@ -221,8 +226,9 @@ func (r *Router) ServeHTTP2(ctx *Context) error {
 	ctx.params = params
 	// Note: params are returned to pool in Context.Reset() called via Release()
 
-	if len(r.middlewares) > 0 {
-		handler = Chain(r.middlewares...)(handler)
+	// Apply cached middleware wrapper if present
+	if r.cachedMiddlewareWrapper != nil {
+		handler = r.cachedMiddlewareWrapper(handler)
 	}
 
 	err := handler.ServeHTTP2(ctx)

@@ -109,6 +109,17 @@ func NewHeaders() Headers {
 // Keys are automatically converted to lowercase per HTTP/2 spec (RFC 7540).
 func (h *Headers) Set(key, value string) {
 	lowerKey := strings.ToLower(key)
+	h.setLowerKey(lowerKey, value)
+}
+
+// SetLower sets a header value where the key is already lowercase.
+// This avoids strings.ToLower allocation for known lowercase keys.
+func (h *Headers) SetLower(key, value string) {
+	h.setLowerKey(key, value)
+}
+
+// setLowerKey is the internal setter for lowercase keys.
+func (h *Headers) setLowerKey(lowerKey, value string) {
 	// Lazily build index on first set if nil
 	if h.index == nil {
 		h.index = make(map[string]int, len(h.headers)+2)

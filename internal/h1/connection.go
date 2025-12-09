@@ -60,7 +60,9 @@ func (c *Connection) HandleData(data []byte) error {
 			req := &c.req
 			consumed, err := c.parser.ParseRequest(req)
 			if err != nil {
-				c.logger.Printf("Parse error: %v", err)
+				if c.logger != nil {
+					c.logger.Printf("Parse error: %v", err)
+				}
 				return c.sendError(400, "Bad Request")
 			}
 
@@ -91,18 +93,24 @@ func (c *Connection) HandleData(data []byte) error {
 				// For no-body and common GET paths, avoid passing headers slice to minimize copies
 				if len(req.Headers) == 0 || (req.Method == "GET" && !req.ChunkedEncoding && req.ContentLength <= 0) {
 					if err := adapter.HandleH1Fast(c.ctx, req.Method, req.Path, req.Host, nil, nil, c.write); err != nil {
-						c.logger.Printf("Handler error: %v", err)
+						if c.logger != nil {
+							c.logger.Printf("Handler error: %v", err)
+						}
 						return c.sendError(500, "Internal Server Error")
 					}
 					// Continue processing subsequent pipelined requests (was break - bug fix)
 				} else if err := adapter.HandleH1Fast(c.ctx, req.Method, req.Path, req.Host, req.Headers, nil, c.write); err != nil {
-					c.logger.Printf("Handler error: %v", err)
+					if c.logger != nil {
+						c.logger.Printf("Handler error: %v", err)
+					}
 					return c.sendError(500, "Internal Server Error")
 				}
 			} else {
 				s := c.requestToStream(req, nil)
 				if err := c.handler.HandleStream(c.ctx, s); err != nil {
-					c.logger.Printf("Handler error: %v", err)
+					if c.logger != nil {
+						c.logger.Printf("Handler error: %v", err)
+					}
 					return c.sendError(500, "Internal Server Error")
 				}
 			}
@@ -130,7 +138,9 @@ func (c *Connection) HandleData(data []byte) error {
 		req := &c.req
 		consumed, err := c.parser.ParseRequest(req)
 		if err != nil {
-			c.logger.Printf("Parse error: %v", err)
+			if c.logger != nil {
+				c.logger.Printf("Parse error: %v", err)
+			}
 			return c.sendError(400, "Bad Request")
 		}
 
