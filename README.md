@@ -10,11 +10,12 @@
 
 - 🚀 **Ultra-Fast**: Built on gnet, one of the fastest networking libraries in Go
 - 🔧 **Simple API**: Easy-to-use interface similar to popular web frameworks
-- 🎯 **HTTP/2 Only**: Focused on modern HTTP/2 protocol (cleartext h2c)
+- 🎯 **HTTP/2 First**: Optimized for HTTP/2 with HTTP/1.1 fallback support
 - 🔄 **Multiplexing**: Full support for HTTP/2 stream multiplexing
 - 🛣️ **Powerful Routing**: High-performance trie-based router with parameters and wildcards
-- 🔌 **Middleware Support**: Chainable middleware for request/response processing
+- 🔌 **Middleware Support**: Built-in Logger, Recovery, CORS, Compression, Rate Limiting
 - 📊 **Production Ready**: Comprehensive testing, benchmarking, and monitoring
+- 📚 **Auto-Documentation**: Swagger-style API docs generation
 
 ## Installation
 
@@ -72,8 +73,8 @@ Celeris HTTP/2 first framework leverages gnet's event-driven architecture to ach
 
 Celeris HTTP/2 first framework is built in three layers:
 
-1. **Transport Layer** (`internal/transport`): gnet event handlers for raw TCP
-2. **Protocol Layer** (`internal/frame`, `internal/stream`): HTTP/2 frame parsing and stream management
+1. **Transport Layer** (`internal/mux`): Protocol multiplexing and gnet event handlers
+2. **Protocol Layer** (`internal/h1`, `internal/h2`): HTTP/1.1 and HTTP/2 parsing
 3. **Application Layer** (`pkg/celeris`): User-friendly API with routing and middleware
 
 ## Documentation
@@ -204,13 +205,15 @@ Celeris HTTP/2 first framework is released under the Apache License 2.0. See [LI
 
 ## Roadmap
 
-- [ ] Server Push support
+- [x] Server Push support
+- [x] Compression middleware (gzip/brotli)
+- [x] Rate limiting
+- [x] HTTP/1.1 support
+- [ ] TLS/HTTPS support
 - [ ] HTTP/2 priority handling
-- [ ] Compression middleware
-- [ ] Rate limiting
 - [ ] Graceful shutdown improvements
-- [ ] Metrics and tracing integration
-- [ ] WebSocket over HTTP/2
+- [ ] Enhanced metrics and tracing
+- [ ] WebSocket support
 
 ---
 
