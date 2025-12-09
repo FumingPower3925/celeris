@@ -48,12 +48,27 @@ var (
 	bHTTP11 = []byte("HTTP/1.1")
 	bRoot   = []byte("/")
 	bJSON   = []byte("/json")
+	bCRLF   = []byte("\r\n") // Pre-allocated to avoid allocation in bytes.Index
 
 	sGET    = "GET"
 	sHTTP11 = "HTTP/1.1"
 	sRoot   = "/"
 	sJSON   = "/json"
 )
+
+// trimSpace trims leading and trailing spaces from b.
+// Inlined to avoid bytes.TrimSpace function call overhead.
+func trimSpace(b []byte) []byte {
+	start := 0
+	for start < len(b) && (b[start] == ' ' || b[start] == '\t') {
+		start++
+	}
+	end := len(b)
+	for end > start && (b[end-1] == ' ' || b[end-1] == '\t') {
+		end--
+	}
+	return b[start:end]
+}
 
 // Parser provides zero-copy HTTP/1.1 request parsing.
 type Parser struct {
@@ -123,7 +138,7 @@ func (p *Parser) ParseRequest(req *Request) (int, error) {
 // Returns complete=false if more data is needed.
 // Optimized: uses index-based parsing to avoid bytes.SplitN allocation.
 func (p *Parser) parseRequestLine(req *Request) (bool, error) {
-	lineEnd := bytes.Index(p.buf[p.pos:], []byte("\r\n"))
+	lineEnd := bytes.Index(p.buf[p.pos:], bCRLF)
 	if lineEnd == -1 {
 		return false, nil
 	}
@@ -180,7 +195,7 @@ func (p *Parser) parseRequestLine(req *Request) (bool, error) {
 // Returns complete=false if more data is needed.
 func (p *Parser) parseHeaders(req *Request) (bool, error) {
 	for {
-		lineEnd := bytes.Index(p.buf[p.pos:], []byte("\r\n"))
+		lineEnd := bytes.Index(p.buf[p.pos:], bCRLF)
 		if lineEnd == -1 {
 			return false, nil
 		}
@@ -194,8 +209,8 @@ func (p *Parser) parseHeaders(req *Request) (bool, error) {
 		if colonIdx == -1 {
 			return false, fmt.Errorf("invalid header line")
 		}
-		rawName := bytes.TrimSpace(line[:colonIdx])
-		rawValue := bytes.TrimSpace(line[colonIdx+1:])
+		rawName := trimSpace(line[:colonIdx])
+		rawValue := trimSpace(line[colonIdx+1:])
 		if err := p.appendHeader(req, rawName, rawValue); err != nil {
 			return false, err
 		}
