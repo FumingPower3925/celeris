@@ -82,5 +82,5 @@ Celeris is built in three layers:
 
 ## License
 
-Celeris is released under the MIT License.
+Celeris is released under the Apache License 2.0.
 

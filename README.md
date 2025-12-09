@@ -195,7 +195,7 @@ Contributions are welcome! Please read [CONTRIBUTING.md](CONTRIBUTING.md) for de
 
 ## License
 
-Celeris is released under the MIT License. See [LICENSE](LICENSE) for details.
+Celeris is released under the Apache License 2.0. See [LICENSE](LICENSE) for details.
 
 ## Acknowledgments
 

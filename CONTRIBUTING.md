@@ -166,5 +166,5 @@ Feel free to open an issue for questions or join our discussions.
 
 ## License
 
-By contributing to Celeris, you agree that your contributions will be licensed under the MIT License.
+By contributing to Celeris, you agree that your contributions will be licensed under the Apache License 2.0.
 
