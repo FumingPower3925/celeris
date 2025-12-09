@@ -42,7 +42,7 @@ func main() {
 
 func homeHandler(ctx *celeris.Context) error {
     return ctx.JSON(200, map[string]string{
-        "message": "Welcome to Celeris!",
+        "message": "Welcome to Celeris HTTP/2 first framework!",
     })
 }
 

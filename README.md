@@ -1,10 +1,10 @@
-# Celeris
+# Celeris HTTP/2 first framework
 
 [![Go Report Card](https://goreportcard.com/badge/github.com/albertbausili/celeris)](https://goreportcard.com/report/github.com/albertbausili/celeris)
 [![GoDoc](https://godoc.org/github.com/albertbausili/celeris?status.svg)](https://godoc.org/github.com/albertbausili/celeris)
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
-**Celeris** is a high-performance HTTP/2-only server built on top of [gnet](https://github.com/panjf2000/gnet) for blazing-fast networking and Go's `x/net/http2` for protocol compliance. It's designed to be simple, fast, and efficient.
+**Celeris HTTP/2 first framework** is a high-performance HTTP/2 first server built on top of [gnet](https://github.com/panjf2000/gnet) for blazing-fast networking and Go's `x/net/http2` for protocol compliance. It's designed to be simple, fast, and efficient.
 
 ## Features
 
@@ -42,7 +42,7 @@ func main() {
     // Define routes
     router.GET("/", func(ctx *celeris.Context) error {
         return ctx.JSON(200, map[string]string{
-            "message": "Hello, Celeris!",
+            "message": "Hello, Celeris HTTP/2 first framework!",
         })
     })
     
@@ -61,7 +61,7 @@ func main() {
 
 ## Performance
 
-Celeris leverages gnet's event-driven architecture to achieve exceptional performance:
+Celeris HTTP/2 first framework leverages gnet's event-driven architecture to achieve exceptional performance:
 
 - **High Throughput**: Handles 100,000+ requests per second
 - **Low Latency**: Sub-millisecond response times
@@ -70,7 +70,7 @@ Celeris leverages gnet's event-driven architecture to achieve exceptional perfor
 
 ## Architecture
 
-Celeris is built in three layers:
+Celeris HTTP/2 first framework is built in three layers:
 
 1. **Transport Layer** (`internal/transport`): gnet event handlers for raw TCP
 2. **Protocol Layer** (`internal/frame`, `internal/stream`): HTTP/2 frame parsing and stream management
@@ -87,7 +87,7 @@ Full documentation is available at [https://albertbausili.github.io/celeris](htt
 
 ## Code Examples
 
-We provide comprehensive examples demonstrating all Celeris features. Each example is self-contained and focuses on specific functionality:
+We provide comprehensive examples demonstrating all Celeris HTTP/2 first framework features. Each example is self-contained and focuses on specific functionality:
 
 **[View all examples](examples/README.md)** - Complete examples directory with middleware, routing, streaming, and more.
 
@@ -195,7 +195,7 @@ Contributions are welcome! Please read [CONTRIBUTING.md](CONTRIBUTING.md) for de
 
 ## License
 
-Celeris is released under the Apache License 2.0. See [LICENSE](LICENSE) for details.
+Celeris HTTP/2 first framework is released under the Apache License 2.0. See [LICENSE](LICENSE) for details.
 
 ## Acknowledgments
 
@@ -214,5 +214,5 @@ Celeris is released under the Apache License 2.0. See [LICENSE](LICENSE) for det
 
 ---
 
-Made with ⚡ by the Celeris team
+Made with ⚡ by the Celeris HTTP/2 first framework team
 

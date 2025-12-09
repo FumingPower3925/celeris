@@ -1,5 +1,5 @@
 
-# Celeris HTTP/2 Framework: Complete Technical Brief for Blog Post
+# Celeris HTTP/2 first framework: Complete Technical Brief for Blog Post
 
 ## Document Purpose
 This document provides comprehensive technical information about the Celeris HTTP/2 framework at the point of achieving 100% h2spec compliance, before the performance optimization phase. It is intended to enable another LLM to write an engaging, technically accurate blog post about the development journey, architecture, and protocol compliance achievements.
@@ -26,7 +26,7 @@ This document provides comprehensive technical information about the Celeris HTT
 
 ### What is Celeris?
 
-**Celeris** (Latin for "swift") is a high-performance HTTP/2-only server framework for Go that combines:
+**Celeris HTTP/2 first framework** (Latin for "swift") is a high-performance HTTP/2-only server framework for Go that combines:
 - **gnet**: Event-driven, zero-copy networking (one of the fastest networking libraries in Go)
 - **golang.org/x/net/http2**: Standard HTTP/2 protocol implementation
 - **Custom glue layer**: Bridges high-performance transport with protocol compliance

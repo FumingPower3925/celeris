@@ -3,13 +3,13 @@ title: "Celeris Documentation"
 weight: 1
 ---
 
-# Celeris
+# Celeris HTTP/2 first framework
 
-Welcome to the Celeris documentation! Celeris is a high-performance HTTP/2-only server built on top of gnet for blazing-fast networking and Go's x/net/http2 for protocol compliance.
+Welcome to the Celeris HTTP/2 first framework documentation! Celeris HTTP/2 first framework is a high-performance HTTP/2-only server built on top of gnet for blazing-fast networking and Go's x/net/http2 for protocol compliance.
 
-## What is Celeris?
+## What is Celeris HTTP/2 first framework?
 
-Celeris is designed to be:
+Celeris HTTP/2 first framework is designed to be:
 
 - **Fast**: Built on gnet, one of the fastest networking libraries in Go
 - **Simple**: Easy-to-use API similar to popular web frameworks
@@ -27,7 +27,7 @@ Celeris is designed to be:
 
 ### High Performance
 
-Celeris leverages gnet's event-driven architecture to achieve exceptional performance:
+Celeris HTTP/2 first framework leverages gnet's event-driven architecture to achieve exceptional performance:
 
 - Handles 100,000+ requests per second
 - Sub-millisecond response times
@@ -68,7 +68,7 @@ Full HTTP/2 support including:
 
 ## Architecture
 
-Celeris is built in three layers:
+Celeris HTTP/2 first framework is built in three layers:
 
 1. **Transport Layer**: gnet event handlers for raw TCP connections
 2. **Protocol Layer**: HTTP/2 frame parsing and stream management
@@ -82,5 +82,5 @@ Celeris is built in three layers:
 
 ## License
 
-Celeris is released under the Apache License 2.0.
+Celeris HTTP/2 first framework is released under the Apache License 2.0.
 

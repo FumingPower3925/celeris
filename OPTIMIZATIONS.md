@@ -1,4 +1,4 @@
-# Celeris HTTP/2 Framework: Performance Optimization Journey
+# Celeris HTTP/2 first framework: Performance Optimization Journey
 
 ## Executive Summary
 

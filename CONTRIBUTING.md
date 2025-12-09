@@ -1,6 +1,6 @@
-## Contributing to Celeris
+## Contributing to Celeris HTTP/2 first framework
 
-Thank you for your interest in contributing to Celeris! This document provides guidelines for contributing to the project.
+Thank you for your interest in contributing to Celeris HTTP/2 first framework! This document provides guidelines for contributing to the project.
 
 ## Code of Conduct
 
@@ -166,5 +166,5 @@ Feel free to open an issue for questions or join our discussions.
 
 ## License
 
-By contributing to Celeris, you agree that your contributions will be licensed under the Apache License 2.0.
+By contributing to Celeris HTTP/2 first framework, you agree that your contributions will be licensed under the Apache License 2.0.
 

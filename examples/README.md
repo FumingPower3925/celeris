@@ -1,6 +1,6 @@
 # Celeris Examples
 
-This directory contains examples demonstrating various features of the Celeris HTTP/2 framework.
+This directory contains examples demonstrating various features of the Celeris HTTP/2 first framework.
 
 ## Examples
 

@@ -1,4 +1,4 @@
-# Celeris HTTP/2 Framework: Feature Expansion & Comprehensive Testing
+# Celeris HTTP/2 first framework: Feature Expansion & Comprehensive Testing
 
 ## Document Purpose
 
