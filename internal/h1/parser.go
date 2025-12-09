@@ -121,6 +121,7 @@ func (p *Parser) ParseRequest(req *Request) (int, error) {
 
 // parseRequestLine parses METHOD SP PATH SP VERSION CRLF, advancing p.pos.
 // Returns complete=false if more data is needed.
+// Optimized: uses index-based parsing to avoid bytes.SplitN allocation.
 func (p *Parser) parseRequestLine(req *Request) (bool, error) {
 	lineEnd := bytes.Index(p.buf[p.pos:], []byte("\r\n"))
 	if lineEnd == -1 {
@@ -129,28 +130,46 @@ func (p *Parser) parseRequestLine(req *Request) (bool, error) {
 	line := p.buf[p.pos : p.pos+lineEnd]
 	p.pos += lineEnd + 2
 
-	parts := bytes.SplitN(line, []byte(" "), 3)
-	if len(parts) != 3 {
+	// Find first space (after METHOD)
+	sp1 := bytes.IndexByte(line, ' ')
+	if sp1 == -1 {
 		return false, fmt.Errorf("invalid request line")
 	}
-	if bytes.Equal(parts[0], bGET) {
+	methodBytes := line[:sp1]
+
+	// Find second space (after PATH)
+	rest := line[sp1+1:]
+	sp2 := bytes.IndexByte(rest, ' ')
+	if sp2 == -1 {
+		return false, fmt.Errorf("invalid request line")
+	}
+	pathBytes := rest[:sp2]
+	versionBytes := rest[sp2+1:]
+
+	// Intern common methods
+	if bytes.Equal(methodBytes, bGET) {
 		req.Method = sGET
 	} else {
-		req.Method = string(parts[0])
+		req.Method = string(methodBytes)
 	}
+
+	// Intern common paths
 	switch {
-	case bytes.Equal(parts[1], bRoot):
+	case bytes.Equal(pathBytes, bRoot):
 		req.Path = sRoot
-	case bytes.Equal(parts[1], bJSON):
+	case bytes.Equal(pathBytes, bJSON):
 		req.Path = sJSON
 	default:
-		req.Path = string(parts[1])
+		req.Path = string(pathBytes)
 	}
-	if bytes.Equal(parts[2], bHTTP11) {
+
+	// Intern version
+	if bytes.Equal(versionBytes, bHTTP11) {
 		req.Version = sHTTP11
 	} else {
-		req.Version = string(parts[2])
+		req.Version = string(versionBytes)
 	}
+
 	if req.Version != "HTTP/1.1" && req.Version != "HTTP/1.0" {
 		return false, fmt.Errorf("unsupported HTTP version: %s", req.Version)
 	}
