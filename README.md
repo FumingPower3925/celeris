@@ -8,14 +8,14 @@
 
 ## Features
 
-- 🚀 **Ultra-Fast**: Built on gnet, one of the fastest networking libraries in Go
-- 🔧 **Simple API**: Easy-to-use interface similar to popular web frameworks
-- 🎯 **HTTP/2 First**: Optimized for HTTP/2 with HTTP/1.1 fallback support
-- 🔄 **Multiplexing**: Full support for HTTP/2 stream multiplexing
-- 🛣️ **Powerful Routing**: High-performance trie-based router with parameters and wildcards
-- 🔌 **Middleware Support**: Built-in Logger, Recovery, CORS, Compression, Rate Limiting
-- 📊 **Production Ready**: Comprehensive testing, benchmarking, and monitoring
-- 📚 **Auto-Documentation**: Swagger-style API docs generation
+- **Ultra-Fast**: Built on gnet, one of the fastest networking libraries in Go
+- **Simple API**: Easy-to-use interface similar to popular web frameworks
+- **HTTP/2 First**: Optimized for HTTP/2 with HTTP/1.1 fallback support
+- **Multiplexing**: Full support for HTTP/2 stream multiplexing
+- **Powerful Routing**: High-performance trie-based router with parameters and wildcards
+- **Middleware Support**: Built-in Logger, Recovery, CORS, Compression, Rate Limiting
+- **Production Ready**: Comprehensive testing, benchmarking, and monitoring
+- **Auto-Documentation**: Swagger-style API docs generation
 
 ## Installation
 
@@ -217,5 +217,5 @@ Celeris HTTP/2 first framework is released under the Apache License 2.0. See [LI
 
 ---
 
-Made with ⚡ by the Celeris HTTP/2 first framework team
+Made with speed in mind by the Celeris HTTP/2 first framework team
 

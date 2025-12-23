@@ -56,9 +56,9 @@ Celeris tracks:
 
 Celeris enforces RFC 7540 Section 6.10 requirements:
 
-✅ **Ordered Processing**: CONTINUATION frames must be contiguous
-✅ **Stream Matching**: CONTINUATION must be for the expected stream  
-✅ **Error Handling**: Invalid sequences trigger RST_STREAM with PROTOCOL_ERROR
+- **Ordered Processing**: CONTINUATION frames must be contiguous
+- **Stream Matching**: CONTINUATION must be for the expected stream  
+- **Error Handling**: Invalid sequences trigger RST_STREAM with PROTOCOL_ERROR
 
 ## Error Conditions
 
@@ -216,11 +216,11 @@ Celeris implements CONTINUATION frames per:
 
 ### Required Behavior
 
-✅ Processes CONTINUATION frames in sequence  
-✅ Validates stream ID matches  
-✅ Enforces frame ordering rules  
-✅ Handles END_HEADERS flag correctly  
-✅ Sends PROTOCOL_ERROR for violations
+- Processes CONTINUATION frames in sequence  
+- Validates stream ID matches  
+- Enforces frame ordering rules  
+- Handles END_HEADERS flag correctly  
+- Sends PROTOCOL_ERROR for violations
 
 ## Best Practices
 
@@ -244,9 +244,9 @@ You don't need to do anything special - CONTINUATION handling is automatic and t
 
 ### Current Implementation
 
-✅ Fully implements RFC 7540 requirements  
-✅ Handles arbitrary header sizes  
-✅ Validates protocol compliance  
+- Fully implements RFC 7540 requirements  
+- Handles arbitrary header sizes  
+- Validates protocol compliance  
 
 The current implementation has no known limitations.
 

@@ -131,16 +131,16 @@ You only need to provide regular headers.
 
 ### Do Push
 
-✅ **Critical Resources**: CSS and JavaScript required for initial render
-✅ **Known Dependencies**: Resources you know the page will need
-✅ **Small Resources**: Fonts, icons, small images
+- **Critical Resources**: CSS and JavaScript required for initial render
+- **Known Dependencies**: Resources you know the page will need
+- **Small Resources**: Fonts, icons, small images
 
 ### Don't Push
 
-❌ **Large Resources**: Videos, large images (let client request them)
-❌ **User-Specific Content**: Content that varies by user state
-❌ **Cacheable Resources**: Resources the client likely has cached
-❌ **Everything**: Over-pushing wastes bandwidth
+- **Large Resources**: Videos, large images (let client request them)
+- **User-Specific Content**: Content that varies by user state
+- **Cacheable Resources**: Resources the client likely has cached
+- **Everything**: Over-pushing wastes bandwidth
 
 ### Example: Optimal Push Strategy
 
